@@ -32,6 +32,7 @@ MANIFEST
 .env.test.local
 .env.production.local
 .flaskenv
+.env.example
 
 # Database
 data/*.wal
