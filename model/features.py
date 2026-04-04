@@ -46,16 +46,26 @@ def engineer_features(con: Optional[duckdb.DuckDBPyConnection] = None) -> pd.Dat
             s.last_shipment_date,
             s.scraped_at,
             -- Certification counts
-            COUNT(c.id) FILTER (WHERE c.status = 'valid')   AS valid_cert_count,
-            COUNT(c.id) FILTER (WHERE c.status = 'expired') AS expired_cert_count,
-            COUNT(c.id) FILTER (WHERE c.source = 'oekotex' AND c.status = 'valid') AS oekotex_valid,
-            COUNT(c.id) FILTER (WHERE c.source = 'gots'    AND c.status = 'valid') AS gots_valid
+            COUNT(DISTINCT c.id) FILTER (WHERE c.status = 'valid')   AS valid_cert_count,
+            COUNT(DISTINCT c.id) FILTER (WHERE c.status = 'expired') AS expired_cert_count,
+            COUNT(DISTINCT c.id) FILTER (WHERE c.source = 'oekotex' AND c.status = 'valid') AS oekotex_valid,
+            COUNT(DISTINCT c.id) FILTER (WHERE c.source = 'gots'    AND c.status = 'valid') AS gots_valid,
+            -- Manifest verification count
+            COUNT(DISTINCT sh.id) AS verified_shipment_count
         FROM suppliers s
         LEFT JOIN certifications c ON c.supplier_id = s.id
+        LEFT JOIN shipments sh ON sh.supplier_id = s.id
         GROUP BY s.id, s.name, s.country, s.shipment_count,
                  s.avg_monthly_shipments, s.total_buyers,
                  s.hs_codes, s.top_buyers,
                  s.first_shipment_date, s.last_shipment_date, s.scraped_at
+    """).df()
+
+    # --- National Trade Stats (Comtrade) ---
+    trade_stats = con.execute("""
+        SELECT reporter_code, hs_code, MAX(trade_value_usd) as nat_volume_usd
+        FROM trade_stats
+        GROUP BY reporter_code, hs_code
     """).df()
 
     if suppliers.empty:
@@ -155,6 +165,45 @@ def engineer_features(con: Optional[duckdb.DuckDBPyConnection] = None) -> pd.Dat
     )
 
     # ------------------------------------------------------------------ #
+    # Feature 9: manifest_verification_score                               #
+    # % of claimed shipments found in public manifest records              #
+    # ------------------------------------------------------------------ #
+    suppliers["manifest_verification_score"] = (
+        suppliers["verified_shipment_count"] / 
+        (suppliers["shipment_count"].clip(lower=1))
+    ).clip(upper=1.0)
+
+    # ------------------------------------------------------------------ #
+    # Feature 10: national_volume_share                                     #
+    # Mapping country name to M49 for joining with Comtrade stats          #
+    # ------------------------------------------------------------------ #
+    m49_map = {
+        "Bangladesh": "050", "China": "156", "India": "356",
+        "Italy": "380", "Pakistan": "586", "Portugal": "620",
+        "Turkey": "792", "Vietnam": "704",
+    }
+    suppliers["m49_code"] = suppliers["country"].map(m49_map)
+    
+    # Calculate a simplified national market share score
+    # We take the first HS code as major product and compare with national export value
+    def get_market_share(row):
+        if not row["m49_code"] or not isinstance(row["hs_codes"], list) or not row["hs_codes"]:
+            return 0.0
+        major_hs = str(row["hs_codes"][0])[:4]
+        match = trade_stats[
+            (trade_stats["reporter_code"] == row["m49_code"]) & 
+            (trade_stats["hs_code"] == major_hs)
+        ]
+        if not match.empty:
+            nat_vol = match.iloc[0]["nat_volume_usd"]
+            # Estimate supplier volume: shipments * estimated $5k avg value
+            est_vol = row["shipment_count"] * 5000 
+            return (est_vol / nat_vol) if nat_vol > 0 else 0.0
+        return 0.0
+
+    suppliers["national_market_share"] = suppliers.apply(get_market_share, axis=1)
+
+    # ------------------------------------------------------------------ #
     # Select final feature columns                                          #
     # ------------------------------------------------------------------ #
     feature_cols = [
@@ -171,6 +220,8 @@ def engineer_features(con: Optional[duckdb.DuckDBPyConnection] = None) -> pd.Dat
         "has_expired_cert",
         "is_high_volume_shipper",
         "country_risk_score",
+        "manifest_verification_score",
+        "national_market_share",
         "shipment_count",
         "avg_monthly_shipments",
         "total_buyers",
@@ -194,6 +245,8 @@ MODEL_FEATURES = [
     "has_expired_cert",
     "is_high_volume_shipper",
     "country_risk_score",
+    "manifest_verification_score",
+    "national_market_share",
     "shipment_count",
     "avg_monthly_shipments",
     "total_buyers",
