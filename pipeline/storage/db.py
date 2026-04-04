@@ -79,6 +79,19 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
         );
     """)
 
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS trade_stats (
+            id                  VARCHAR PRIMARY KEY,      -- reporter_code:partner_code:year:hs_code
+            reporter_code       VARCHAR,
+            partner_code        VARCHAR,
+            year                INTEGER,
+            hs_code             VARCHAR,
+            trade_value_usd     FLOAT,
+            net_weight_kg       FLOAT,
+            updated_at          TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
     logger.info(f"Database initialized at {db_path}")
     return con
 
@@ -136,4 +149,24 @@ def upsert_certification(con: duckdb.DuckDBPyConnection, cert: dict) -> None:
         cert.get("status"),
         cert.get("valid_until"),
         cert.get("certificate_name"),
+    ])
+def upsert_trade_stat(con: duckdb.DuckDBPyConnection, stat: dict) -> None:
+    """Insert or update a trade stat record."""
+    stat_id = f"{stat['reporter_code']}:{stat['partner_code']}:{stat['year']}:{stat['hs_code']}"
+    con.execute("""
+        INSERT INTO trade_stats (
+            id, reporter_code, partner_code, year, hs_code, trade_value_usd, net_weight_kg
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id) DO UPDATE SET
+            trade_value_usd = excluded.trade_value_usd,
+            net_weight_kg = excluded.net_weight_kg,
+            updated_at = NOW()
+    """, [
+        stat_id,
+        stat.get("reporter_code"),
+        stat.get("partner_code"),
+        stat.get("year"),
+        stat.get("hs_code"),
+        stat.get("trade_value_usd"),
+        stat.get("net_weight_kg"),
     ])

@@ -48,6 +48,8 @@ FEATURE_LABELS = {
     "avg_monthly_shipments":        "Low average monthly shipments",
     "total_buyers":                 "Very few distinct buyers",
     "valid_cert_count":             "No valid certifications",
+    "manifest_verification_score":  "Unverified shipment claims (no matching manifest records)",
+    "national_market_share":        "Volume discrepancy vs. national trade statistics",
 }
 
 
