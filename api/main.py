@@ -9,24 +9,40 @@ Endpoints:
   GET  /health              Healthcheck
 """
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional
-from loguru import logger
-import json
-
 from pipeline.storage.db import init_db
 from model.features import engineer_features, MODEL_FEATURES
 from model.scorer import score_supplier
 from api.decision_engine import DecisionEngine, ProcurementCriteria
+from api.auth import get_api_key
+
+from fastapi import Depends, Request
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from contextlib import asynccontextmanager
+
+# Rate limiting setup
+limiter = Limiter(key_func=get_remote_address)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize DB connection on startup
+    global con
+    con = init_db()
+    yield
+    # Cleanup on shutdown
+    con.close()
 
 app = FastAPI(
     title="Textile Supplier Trust Engine",
     description="DataVibe — Supplier fulfillment risk scoring for trade intelligence. "
                 "Powers autonomous AI procurement agents.",
     version="0.2.0",
+    lifespan=lifespan
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,8 +51,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Single shared DuckDB connection
-con = init_db()
+# Global connection (initialized in lifespan)
+con = None
 
 
 # ------------------------------------------------------------------ #
@@ -81,7 +97,8 @@ def health():
 
 
 @app.post("/score", response_model=TrustScoreResponse)
-def score(req: ScoreRequest):
+@limiter.limit("10/minute")
+def score(req: ScoreRequest, request: Request, key: str = Depends(get_api_key)):
     """
     Score a supplier by ID or name.
     Pulls features from DuckDB and runs the LightGBM model.
@@ -156,7 +173,8 @@ def score(req: ScoreRequest):
 
 
 @app.post("/procure/evaluate")
-def procure_evaluate(req: ProcureRequest):
+@limiter.limit("5/minute")
+def procure_evaluate(req: ProcureRequest, request: Request, key: str = Depends(get_api_key)):
     """
     AI Procurement Decision Engine.
 
@@ -214,7 +232,13 @@ def procure_evaluate(req: ProcureRequest):
 
 
 @app.get("/suppliers")
-def list_suppliers(min_score: float = 0, country: Optional[str] = None, limit: int = 50):
+def list_suppliers(
+    request: Request,
+    min_score: float = 0, 
+    country: Optional[str] = None, 
+    limit: int = 50,
+    key: str = Depends(get_api_key)
+):
     """List all scored suppliers, optionally filtered by min trust score or country."""
     query = """
         SELECT s.id, s.name, s.country, t.trust_score, t.shap_flags_json
@@ -244,9 +268,9 @@ def list_suppliers(min_score: float = 0, country: Optional[str] = None, limit: i
 
 
 @app.get("/supplier/{supplier_id}", response_model=TrustScoreResponse)
-def get_supplier(supplier_id: str):
+def get_supplier(supplier_id: str, request: Request, key: str = Depends(get_api_key)):
     """Full trust profile for a single supplier."""
-    return score(ScoreRequest(supplier_id=supplier_id))
+    return score(ScoreRequest(supplier_id=supplier_id), request, key)
 
 
 if __name__ == "__main__":
