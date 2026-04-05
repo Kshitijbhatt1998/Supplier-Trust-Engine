@@ -50,6 +50,11 @@ class TestDatabase(unittest.TestCase):
     def setUp(self):
         # Use a temp DB for each test
         self.tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)
+        self.tmp.close()
+        try:
+            os.unlink(self.tmp.name)
+        except OSError:
+            pass
         self.con = init_db(path=self.tmp.name)
 
     def tearDown(self):
@@ -95,6 +100,11 @@ class TestFeatureEngineering(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)
+        self.tmp.close()
+        try:
+            os.unlink(self.tmp.name)
+        except OSError:
+            pass
         self.con = init_db(path=self.tmp.name)
         upsert_supplier(self.con, SAMPLE_SUPPLIER)
         upsert_certification(self.con, SAMPLE_CERT)
@@ -146,8 +156,8 @@ if __name__ == "__main__":
     result = runner.run(suite)
 
     if result.wasSuccessful():
-        print("\n✅ All smoke tests passed. Stack is working.")
+        print("\n[SUCCESS] All smoke tests passed. Stack is working.")
         sys.exit(0)
     else:
-        print("\n❌ Some tests failed. Fix before running the scraper.")
+        print("\n[FAILURE] Some tests failed. Fix before running the scraper.")
         sys.exit(1)
