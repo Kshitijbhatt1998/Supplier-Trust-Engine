@@ -1,0 +1,119 @@
+test_all_tables_exist (__main__.TestDatabase) ... ERROR
+test_upsert_certification (__main__.TestDatabase) ... ERROR
+test_upsert_supplier (__main__.TestDatabase) ... ERROR
+test_upsert_supplier_idempotent (__main__.TestDatabase) ... ERROR
+test_all_model_features_present (__main__.TestFeatureEngineering) ... ERROR
+test_certification_score (__main__.TestFeatureEngineering) ... ERROR
+test_customer_concentration_ratio (__main__.TestFeatureEngineering) ... ERROR
+test_feature_engineering_runs (__main__.TestFeatureEngineering) ... ERROR
+test_no_nulls_in_model_features (__main__.TestFeatureEngineering) ... ERROR
+test_years_active_positive (__main__.TestFeatureEngineering) ... ERROR
+
+======================================================================
+ERROR: test_all_tables_exist (__main__.TestDatabase)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_smoke.py", line 54, in setUp
+    self.con = init_db(path=self.tmp.name)
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\pipeline\storage\db.py", line 21, in init_db
+    con = duckdb.connect(db_path)
+duckdb.duckdb.IOException: IO Error: The file "c:\users\kshit\appdata\local\temp\tmprdpsm948.duckdb" exists, but it is not a valid DuckDB database file!
+
+======================================================================
+ERROR: test_upsert_certification (__main__.TestDatabase)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_smoke.py", line 54, in setUp
+    self.con = init_db(path=self.tmp.name)
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\pipeline\storage\db.py", line 21, in init_db
+    con = duckdb.connect(db_path)
+duckdb.duckdb.IOException: IO Error: The file "c:\users\kshit\appdata\local\temp\tmp1xu46enr.duckdb" exists, but it is not a valid DuckDB database file!
+
+======================================================================
+ERROR: test_upsert_supplier (__main__.TestDatabase)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_smoke.py", line 54, in setUp
+    self.con = init_db(path=self.tmp.name)
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\pipeline\storage\db.py", line 21, in init_db
+    con = duckdb.connect(db_path)
+duckdb.duckdb.IOException: IO Error: The file "c:\users\kshit\appdata\local\temp\tmp1urzlrmt.duckdb" exists, but it is not a valid DuckDB database file!
+
+======================================================================
+ERROR: test_upsert_supplier_idempotent (__main__.TestDatabase)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_smoke.py", line 54, in setUp
+    self.con = init_db(path=self.tmp.name)
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\pipeline\storage\db.py", line 21, in init_db
+    con = duckdb.connect(db_path)
+duckdb.duckdb.IOException: IO Error: The file "c:\users\kshit\appdata\local\temp\tmpwqkcw_lj.duckdb" exists, but it is not a valid DuckDB database file!
+
+======================================================================
+ERROR: test_all_model_features_present (__main__.TestFeatureEngineering)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_smoke.py", line 100, in setUp
+    self.con = init_db(path=self.tmp.name)
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\pipeline\storage\db.py", line 21, in init_db
+    con = duckdb.connect(db_path)
+duckdb.duckdb.IOException: IO Error: The file "c:\users\kshit\appdata\local\temp\tmp09n8w_22.duckdb" exists, but it is not a valid DuckDB database file!
+
+======================================================================
+ERROR: test_certification_score (__main__.TestFeatureEngineering)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_smoke.py", line 100, in setUp
+    self.con = init_db(path=self.tmp.name)
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\pipeline\storage\db.py", line 21, in init_db
+    con = duckdb.connect(db_path)
+duckdb.duckdb.IOException: IO Error: The file "c:\users\kshit\appdata\local\temp\tmpxefi79ev.duckdb" exists, but it is not a valid DuckDB database file!
+
+======================================================================
+ERROR: test_customer_concentration_ratio (__main__.TestFeatureEngineering)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_smoke.py", line 100, in setUp
+    self.con = init_db(path=self.tmp.name)
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\pipeline\storage\db.py", line 21, in init_db
+    con = duckdb.connect(db_path)
+duckdb.duckdb.IOException: IO Error: The file "c:\users\kshit\appdata\local\temp\tmpdiogndh7.duckdb" exists, but it is not a valid DuckDB database file!
+
+======================================================================
+ERROR: test_feature_engineering_runs (__main__.TestFeatureEngineering)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_smoke.py", line 100, in setUp
+    self.con = init_db(path=self.tmp.name)
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\pipeline\storage\db.py", line 21, in init_db
+    con = duckdb.connect(db_path)
+duckdb.duckdb.IOException: IO Error: The file "c:\users\kshit\appdata\local\temp\tmpua8gpmvz.duckdb" exists, but it is not a valid DuckDB database file!
+
+======================================================================
+ERROR: test_no_nulls_in_model_features (__main__.TestFeatureEngineering)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_smoke.py", line 100, in setUp
+    self.con = init_db(path=self.tmp.name)
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\pipeline\storage\db.py", line 21, in init_db
+    con = duckdb.connect(db_path)
+duckdb.duckdb.IOException: IO Error: The file "c:\users\kshit\appdata\local\temp\tmpnh3llomw.duckdb" exists, but it is not a valid DuckDB database file!
+
+======================================================================
+ERROR: test_years_active_positive (__main__.TestFeatureEngineering)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_smoke.py", line 100, in setUp
+    self.con = init_db(path=self.tmp.name)
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\pipeline\storage\db.py", line 21, in init_db
+    con = duckdb.connect(db_path)
+duckdb.duckdb.IOException: IO Error: The file "c:\users\kshit\appdata\local\temp\tmp_g1i8egj.duckdb" exists, but it is not a valid DuckDB database file!
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.097s
+
+FAILED (errors=10)
+Running smoke tests...
+
+
+[FAILURE] Some tests failed. Fix before running the scraper.

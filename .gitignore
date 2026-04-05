@@ -1,6 +1,7 @@
 # Python
 venv/
 .venv/
+.env.example
 __pycache__/
 *.py[cod]
 *$py.class
@@ -32,6 +33,7 @@ MANIFEST
 .env.test.local
 .env.production.local
 .flaskenv
+.env.example
 
 # Database
 data/*.wal

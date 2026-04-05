@@ -2,12 +2,21 @@
 const BASE = '/api'
 
 async function request(path, options = {}) {
+  // Pull from Vite .env if available, fallback to development default
+  const apiKey = import.meta.env.VITE_API_KEY || 'dev-trust-key-99'
+  
+  const headers = { 
+    'Content-Type': 'application/json',
+    'X-API-Key': apiKey,
+    ...(options.headers || {})
+  }
+
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers,
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    const err = await res.json().catch(() => ({ detail: `Error ${res.status}` }))
     throw new Error(err.detail || `HTTP ${res.status}`)
   }
   return res.json()
