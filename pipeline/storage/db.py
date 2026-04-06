@@ -127,6 +127,7 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
     con.execute("CREATE INDEX IF NOT EXISTS idx_cert_supplier    ON certifications(supplier_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_cert_status      ON certifications(status)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_alias_norm       ON entity_aliases(alias_normalized)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_alias_canonical  ON entity_aliases(canonical_id)")
 
     logger.info(f"Database initialized at {db_path}")
     return con

@@ -39,4 +39,18 @@ export const api = {
   score:     (body)         => request('/score',            { method: 'POST', body: JSON.stringify(body) }),
   procure:   (body)         => request('/procure/evaluate', { method: 'POST', body: JSON.stringify(body) }),
   feedback:  (body)         => request('/resolver/feedback', { method: 'POST', body: JSON.stringify(body) }),
+  
+  // Admin Endpoints
+  adminQueue:  ()             => {
+    const adminToken = import.meta.env.VITE_ADMIN_TOKEN
+    return request('/admin/review-queue', { headers: { 'X-Admin-Token': adminToken } })
+  },
+  adminAction: (body)         => {
+    const adminToken = import.meta.env.VITE_ADMIN_TOKEN
+    return request('/admin/alias/action', { 
+      method: 'POST', 
+      body: JSON.stringify(body),
+      headers: { 'X-Admin-Token': adminToken }
+    })
+  },
 }

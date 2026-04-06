@@ -31,7 +31,7 @@ from pipeline.storage.db import init_db
 from model.features import engineer_features, MODEL_FEATURES
 from model.scorer import score_supplier
 from api.decision_engine import DecisionEngine, ProcurementCriteria
-from api.auth import get_api_key
+from api.auth import get_api_key, get_admin_key
 from api.resolver import EntityResolver
 
 
@@ -121,6 +121,12 @@ class FeedbackRequest(BaseModel):
     canonical_id:  str = Field(..., max_length=100)
     is_confirmed:  bool = True
     reason_code:   Optional[str] = None
+
+
+class AdminActionRequest(BaseModel):
+    alias_ids:   list[str]
+    action:      str # 'verify' or 'reject'
+    reason_code: Optional[str] = None
 
 
 class TrustScoreResponse(BaseModel):
@@ -426,6 +432,88 @@ def resolver_feedback(req: FeedbackRequest, request: Request, key: str = Depends
         """, [normalized, req.canonical_id, req.reason_code or 'user_rejected'])
     
     return {"status": "success", "message": "Feedback recorded"}
+
+
+# ------------------------------------------------------------------ #
+# Admin Dashboard Endpoints                                          #
+# ------------------------------------------------------------------ #
+
+@v1.get("/admin/review-queue")
+@limiter.limit("10/minute")
+def admin_review_queue(request: Request, key: str = Depends(get_admin_key)):
+    """
+    Returns a prioritized queue of unverified aliases for human audit.
+    Priority P = (0.4 * cap(V, 100)/100) + (0.3 * T/100) + (0.3 * S/100)
+    """
+    query = """
+        SELECT 
+            a.id,
+            a.alias_name,
+            a.alias_normalized,
+            a.canonical_id,
+            a.match_score,
+            a.suggestion_count,
+            s.name as canonical_name,
+            t.trust_score,
+            t.shap_flags_json,
+            -- Calculate Priority Score P
+            (0.4 * LEAST(a.suggestion_count, 100) / 100.0) + 
+            (0.3 * COALESCE(t.trust_score, 0) / 100.0) + 
+            (0.3 * a.match_score / 100.0) as priority_score
+        FROM entity_aliases a
+        JOIN suppliers s ON a.canonical_id = s.id
+        LEFT JOIN trust_scores t ON a.canonical_id = t.supplier_id
+        WHERE a.is_verified = FALSE
+        ORDER BY priority_score DESC
+        LIMIT 100
+    """
+    rows = con.execute(query).fetchall()
+    
+    return [
+        {
+            "id": r[0],
+            "alias_name": r[1],
+            "alias_normalized": r[2],
+            "canonical_id": r[3],
+            "match_score": r[4],
+            "suggestion_count": r[5],
+            "canonical_name": r[6],
+            "trust_score": r[7],
+            "shap_flags": json.loads(r[8]) if r[8] else [],
+            "priority_score": round(r[9], 4)
+        }
+        for r in rows
+    ]
+
+@v1.post("/admin/alias/action")
+@limiter.limit("10/minute")
+def admin_alias_action(req: AdminActionRequest, request: Request, key: str = Depends(get_admin_key)):
+    """
+    Bulk verify or reject aliases.
+    """
+    if not req.alias_ids:
+        return {"status": "ignored", "message": "No IDs provided"}
+
+    if req.action == 'verify':
+        # Single click promotion
+        for aid in req.alias_ids:
+            con.execute("UPDATE entity_aliases SET is_verified = TRUE WHERE id = ?", [aid])
+            
+    elif req.action == 'reject':
+        # Move to negative cache and delete from aliases
+        for aid in req.alias_ids:
+            # Get data first
+            row = con.execute("SELECT alias_normalized, canonical_id FROM entity_aliases WHERE id = ?", [aid]).fetchone()
+            if row:
+                con.execute("""
+                    INSERT INTO entity_rejections (alias_normalized, canonical_id, reason_code)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT DO NOTHING
+                """, [row[0], row[1], req.reason_code or 'admin_rejected'])
+                
+                con.execute("DELETE FROM entity_aliases WHERE id = ?", [aid])
+                
+    return {"status": "success", "count": len(req.alias_ids)}
 
 
 app.include_router(v1)

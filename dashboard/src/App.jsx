@@ -4,6 +4,7 @@ import StatGrid from './components/StatGrid';
 import SupplierTable from './components/SupplierTable';
 import ProcurementSimulator from './components/ProcurementSimulator';
 import SupplierModal from './components/SupplierModal';
+import AdminDashboard from './components/AdminDashboard';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -54,6 +55,10 @@ export default function App() {
           </button>
           <button className={`nav-item ${activeTab === 'procure' ? 'active' : ''}`} onClick={() => setActiveTab('procure')}>
             ⚡ API Decision Layer
+          </button>
+          <div className="nav-spacer" style={{ margin: '12px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }} />
+          <button className={`nav-item ${activeTab === 'admin' ? 'active' : ''}`} onClick={() => setActiveTab('admin')}>
+            🛡 Admin Control
           </button>
         </nav>
         <div className="sidebar-footer">
@@ -126,6 +131,17 @@ export default function App() {
               </div>
             </header>
             <ProcurementSimulator />
+          </>
+        )}
+        {activeTab === 'admin' && (
+          <>
+            <header className="page-header">
+              <div>
+                <h2>Audit & Control</h2>
+                <p>Human-in-the-loop entity verification</p>
+              </div>
+            </header>
+            <AdminDashboard />
           </>
         )}
       </main>

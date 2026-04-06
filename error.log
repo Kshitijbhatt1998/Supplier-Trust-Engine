@@ -1,7 +1,7 @@
-2026-04-06 20:49:56.955 | INFO     | pipeline.storage.db:init_db:131 - Database initialized at :memory:
+2026-04-06 21:10:50.585 | INFO     | pipeline.storage.db:init_db:132 - Database initialized at :memory:
 Traceback (most recent call last):
-  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_negative_signal.py", line 55, in <module>
-    test_negative_signal()
-  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_negative_signal.py", line 24, in test_negative_signal
-    con.execute("""
-duckdb.duckdb.ConstraintException: Constraint Error: NOT NULL constraint failed: entity_rejections.canonical_id
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_admin_api.py", line 88, in <module>
+    test_admin_priority_and_actions()
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_admin_api.py", line 47, in test_admin_priority_and_actions
+    assert response.status_code == 200
+AssertionError
