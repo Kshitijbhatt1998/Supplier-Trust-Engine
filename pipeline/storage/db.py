@@ -16,7 +16,9 @@ def get_db_path() -> str:
 def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
     """Initialize DuckDB with all required tables."""
     db_path = path or get_db_path()
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
 
     con = duckdb.connect(db_path)
 
@@ -101,6 +103,7 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
                                                           -- before the supplier row is inserted
             source              VARCHAR,                  -- 'importyeti' | 'bol' | 'indiamart' | ...
             match_score         FLOAT,                    -- 0–100; 100=exact/alias, 0=new entity
+            is_verified         BOOLEAN DEFAULT FALSE,    -- manual/trusted match flag
             resolved_at         TIMESTAMP DEFAULT NOW()
         );
     """)
