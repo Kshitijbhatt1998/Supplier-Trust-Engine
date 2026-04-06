@@ -35,11 +35,14 @@ MANIFEST
 .flaskenv
 .env.example
 
-# Database
-data/*.wal
-data/*.tmp
+# Database — never commit live DB or session files
+*.duckdb
 *.duckdb.wal
 *.duckdb.tmp
+data/.importyeti_session.json
+
+# Test output files
+test_output*.txt
 
 # IDEs
 .vscode/

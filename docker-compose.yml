@@ -1,0 +1,35 @@
+services:
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - db_data:/app/data          # DuckDB persists across restarts
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    environment:
+      # nginx injects this into every /api/* proxy request — never in the JS bundle
+      API_KEY: ${API_KEY:-dev-trust-key-99}
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  db_data:

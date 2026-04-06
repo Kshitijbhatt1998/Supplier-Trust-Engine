@@ -1,13 +1,31 @@
 """
-Textile Supplier Trust Engine — FastAPI
+Textile Supplier Trust Engine — FastAPI v1
 
-Endpoints:
-  POST /score               Score a supplier by name or ID
-  POST /procure/evaluate    AI Decision Engine — autonomous procurement filtering
-  GET  /supplier/{id}       Full supplier profile with trust score
-  GET  /suppliers           List all scored suppliers (filterable)
-  GET  /health              Healthcheck
+All routes versioned under /v1/.
+
+Auth model:
+  - Dashboard GET endpoints (health, stats, suppliers, supplier/{id}) → no key required.
+    These are served by your own nginx proxy — not exposed directly to the internet.
+  - AI agent POST endpoints (score, procure/evaluate) → X-API-Key required.
+    External callers must present a valid key.
 """
+
+import os
+import json
+from typing import Optional
+from contextlib import asynccontextmanager
+
+import sentry_sdk
+from fastapi import FastAPI, HTTPException, Depends, Request, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRouter
+from pydantic import BaseModel, Field, field_validator
+from loguru import logger
+
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from pipeline.storage.db import init_db
 from model.features import engineer_features, MODEL_FEATURES
@@ -15,44 +33,77 @@ from model.scorer import score_supplier
 from api.decision_engine import DecisionEngine, ProcurementCriteria
 from api.auth import get_api_key
 
-from fastapi import Depends, Request
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-from contextlib import asynccontextmanager
 
-# Rate limiting setup
+# ------------------------------------------------------------------ #
+# Sentry — only initialised when SENTRY_DSN is set in env             #
+# ------------------------------------------------------------------ #
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    sentry_sdk.init(dsn=_sentry_dsn, traces_sample_rate=0.1)
+    logger.info("Sentry error tracking initialised.")
+
+
+# ------------------------------------------------------------------ #
+# Rate limiter                                                          #
+# ------------------------------------------------------------------ #
 limiter = Limiter(key_func=get_remote_address)
+
+
+# ------------------------------------------------------------------ #
+# App lifespan                                                          #
+# ------------------------------------------------------------------ #
+con = None  # DuckDB connection, initialised in lifespan
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize DB connection on startup
     global con
     con = init_db()
     yield
-    # Cleanup on shutdown
     con.close()
 
+
+# ------------------------------------------------------------------ #
+# App                                                                   #
+# ------------------------------------------------------------------ #
 app = FastAPI(
     title="Textile Supplier Trust Engine",
-    description="DataVibe — Supplier fulfillment risk scoring for trade intelligence. "
-                "Powers autonomous AI procurement agents.",
-    version="0.2.0",
-    lifespan=lifespan
+    description=(
+        "DataVibe — Supplier fulfillment risk scoring for trade intelligence. "
+        "Powers autonomous AI procurement agents."
+    ),
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+# ------------------------------------------------------------------ #
+# CORS — lock to configured origins (never *)                          #
+# ------------------------------------------------------------------ #
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost,http://localhost:80")
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
-# Global connection (initialized in lifespan)
-con = None
+
+# ------------------------------------------------------------------ #
+# Global error handler — never expose stack traces                     #
+# ------------------------------------------------------------------ #
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled error [{request.method} {request.url}]: {exc!r}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 # ------------------------------------------------------------------ #
@@ -60,49 +111,42 @@ con = None
 # ------------------------------------------------------------------ #
 
 class ScoreRequest(BaseModel):
-    supplier_id: Optional[str] = None
-    supplier_name: Optional[str] = None
+    supplier_id:   Optional[str] = Field(None, max_length=100)
+    supplier_name: Optional[str] = Field(None, max_length=200)
 
 
 class TrustScoreResponse(BaseModel):
-    supplier_id: str
-    supplier_name: str
-    country: Optional[str] = None
-    trust_score: float            # 0–100
-    risk_probability: float       # 0–1
-    risk_flags: list[str]         # SHAP-driven human-readable flags
-    certification_status: dict    # oekotex, gots
-    shipment_summary: dict        # count, frequency, buyers
-    trade_proof: dict             # manifest_score, market_share
+    supplier_id:          str
+    supplier_name:        str
+    country:              Optional[str] = None
+    trust_score:          float
+    risk_probability:     float
+    risk_flags:           list[str]
+    certification_status: dict
+    shipment_summary:     dict
+    trade_proof:          dict
 
 
 class ProcureRequest(BaseModel):
-    category: str
-    min_trust_score: float = 75.0
-    required_certs: list[str] = []
-    country_prefer: list[str] = []
-    country_exclude: list[str] = []
-    max_days_inactive: int = 365
-    max_results: int = 5
+    category:          str   = Field(..., min_length=1, max_length=200)
+    min_trust_score:   float = Field(75.0, ge=0.0, le=100.0)
+    required_certs:    list[str] = Field(default_factory=list, max_length=10)
+    country_prefer:    list[str] = Field(default_factory=list, max_length=20)
+    country_exclude:   list[str] = Field(default_factory=list, max_length=20)
+    max_days_inactive: int   = Field(365, ge=1, le=3650)
+    max_results:       int   = Field(5, ge=1, le=20)
+
+    @field_validator("required_certs", "country_prefer", "country_exclude", mode="before")
+    @classmethod
+    def clamp_string_lengths(cls, v):
+        return [str(item)[:100] for item in v]
 
 
 # ------------------------------------------------------------------ #
-# Endpoints                                                             #
+# Internal scoring helper (no auth dependency)                         #
 # ------------------------------------------------------------------ #
 
-@app.get("/health")
-def health():
-    n = con.execute("SELECT COUNT(*) FROM suppliers").fetchone()[0]
-    return {"status": "ok", "service": "textile-trust-engine", "suppliers_in_db": n}
-
-
-@app.post("/score", response_model=TrustScoreResponse)
-@limiter.limit("10/minute")
-def score(req: ScoreRequest, request: Request, key: str = Depends(get_api_key)):
-    """
-    Score a supplier by ID or name.
-    Pulls features from DuckDB and runs the LightGBM model.
-    """
+def _score_supplier_by_request(req: ScoreRequest) -> TrustScoreResponse:
     if not req.supplier_id and not req.supplier_name:
         raise HTTPException(400, "Provide supplier_id or supplier_name")
 
@@ -113,39 +157,35 @@ def score(req: ScoreRequest, request: Request, key: str = Depends(get_api_key)):
     else:
         row = con.execute(
             "SELECT * FROM suppliers WHERE lower(name) LIKE lower(?)",
-            [f"%{req.supplier_name}%"]
+            [f"%{req.supplier_name}%"],
         ).fetchone()
 
     if not row:
         raise HTTPException(404, f"Supplier not found: {req.supplier_id or req.supplier_name}")
 
-    cols = [desc[0] for desc in con.description]
+    cols     = [desc[0] for desc in con.description]
     supplier = dict(zip(cols, row))
 
-    # Feature engineering
     features_df = engineer_features(con)
-    feat_row = features_df[features_df["id"] == supplier["id"]]
+    feat_row    = features_df[features_df["id"] == supplier["id"]]
 
     if feat_row.empty:
         raise HTTPException(500, "Could not engineer features for this supplier")
 
     features = feat_row.iloc[0].to_dict()
 
-    # Score
     try:
         result = score_supplier(features)
     except FileNotFoundError:
         raise HTTPException(
             503,
-            "Model not trained yet. Run: python run_pipeline.py --seed --train --score"
+            "Model not trained yet. Run: python run_pipeline.py --seed --train --score",
         )
 
-    # Certification data
     certs = con.execute(
         "SELECT source, status, valid_until FROM certifications WHERE supplier_id = ?",
-        [supplier["id"]]
+        [supplier["id"]],
     ).fetchall()
-
     cert_status = {
         c[0]: {"status": c[1], "valid_until": str(c[2]) if c[2] else None}
         for c in certs
@@ -160,87 +200,59 @@ def score(req: ScoreRequest, request: Request, key: str = Depends(get_api_key)):
         risk_flags=result["risk_flags"],
         certification_status=cert_status,
         shipment_summary={
-            "total_shipments":  supplier.get("shipment_count"),
-            "avg_monthly":      supplier.get("avg_monthly_shipments"),
-            "total_buyers":     supplier.get("total_buyers"),
-            "last_shipment":    str(supplier.get("last_shipment_date")) if supplier.get("last_shipment_date") else None,
+            "total_shipments": supplier.get("shipment_count"),
+            "avg_monthly":     supplier.get("avg_monthly_shipments"),
+            "total_buyers":    supplier.get("total_buyers"),
+            "last_shipment":   str(supplier.get("last_shipment_date")) if supplier.get("last_shipment_date") else None,
         },
         trade_proof={
             "manifest_verification_score": features.get("manifest_verification_score", 0),
             "national_market_share":       features.get("national_market_share", 0),
-        }
+        },
     )
 
 
-@app.post("/procure/evaluate")
-@limiter.limit("5/minute")
-def procure_evaluate(req: ProcureRequest, request: Request, key: str = Depends(get_api_key)):
-    """
-    AI Procurement Decision Engine.
+# ------------------------------------------------------------------ #
+# v1 Router                                                             #
+# ------------------------------------------------------------------ #
+v1 = APIRouter(prefix="/v1")
 
-    An AI micro-business sends procurement criteria; this endpoint queries
-    the trust database, applies hard filters, ranks results, and returns
-    a list of approved suppliers with rationale.
 
-    Example — AI agent looking for GOTS-certified Indian suppliers:
-        {
-          "category": "organic cotton tote bags",
-          "min_trust_score": 80,
-          "required_certs": ["gots"],
-          "country_prefer": ["India", "Turkey"],
-          "country_exclude": [],
-          "max_days_inactive": 180,
-          "max_results": 3
-        }
-    """
-    criteria = ProcurementCriteria(
-        category=req.category,
-        min_trust_score=req.min_trust_score,
-        required_certs=req.required_certs,
-        country_prefer=req.country_prefer,
-        country_exclude=req.country_exclude,
-        max_days_inactive=req.max_days_inactive,
-        max_results=req.max_results,
-    )
+# ── Public / dashboard-facing GET endpoints ──────────────────────── #
 
-    engine = DecisionEngine(con)
-    decision = engine.evaluate(criteria)
+@v1.get("/health")
+@limiter.limit("60/minute")
+def health(request: Request):
+    n = con.execute("SELECT COUNT(*) FROM suppliers").fetchone()[0]
+    return {"status": "ok", "service": "textile-trust-engine", "suppliers_in_db": n}
 
-    # Serialize the dataclass to a plain dict
+
+@v1.get("/stats")
+@limiter.limit("60/minute")
+def stats(request: Request):
+    """Aggregate counts for the dashboard stat cards."""
+    total       = con.execute("SELECT COUNT(*) FROM suppliers").fetchone()[0]
+    avg_score   = con.execute("SELECT AVG(trust_score) FROM trust_scores").fetchone()[0] or 0
+    valid_certs = con.execute("SELECT COUNT(*) FROM certifications WHERE status = 'valid'").fetchone()[0]
+    risk_alerts = con.execute("SELECT COUNT(*) FROM trust_scores WHERE trust_score < 40").fetchone()[0]
     return {
-        "approved": decision.approved,
-        "category": decision.category,
-        "criteria_used": decision.criteria_used,
-        "decision_rationale": decision.decision_rationale,
-        "fallback_message": decision.fallback_message,
-        "matched_suppliers": [
-            {
-                "supplier_id":            m.supplier_id,
-                "supplier_name":          m.supplier_name,
-                "country":                m.country,
-                "trust_score":            m.trust_score,
-                "rank_score":             round(m.rank_score, 2),
-                "risk_flags":             m.risk_flags,
-                "certification_status":   m.certification_status,
-                "shipment_count":         m.shipment_count,
-                "days_since_last_shipment": m.days_since_last_shipment,
-                "match_reasons":          m.match_reasons,
-            }
-            for m in decision.matched_suppliers
-        ],
+        "total_suppliers":  total,
+        "avg_trust_score":  round(float(avg_score), 1),
+        "valid_cert_count": valid_certs,
+        "risk_alerts":      risk_alerts,
     }
 
 
-@app.get("/suppliers")
+@v1.get("/suppliers")
+@limiter.limit("30/minute")
 def list_suppliers(
     request: Request,
-    min_score: float = 0, 
-    country: Optional[str] = None, 
-    limit: int = 50,
-    key: str = Depends(get_api_key)
+    min_score: float = Query(0, ge=0, le=100),
+    country:   Optional[str] = Query(None, max_length=100),
+    limit:     int   = Query(50, ge=1, le=200),
 ):
     """List all scored suppliers, optionally filtered by min trust score or country."""
-    query = """
+    query  = """
         SELECT s.id, s.name, s.country, t.trust_score, t.shap_flags_json
         FROM suppliers s
         JOIN trust_scores t ON t.supplier_id = s.id
@@ -252,9 +264,10 @@ def list_suppliers(
         query += " AND s.country ILIKE ?"
         params.append(f"%{country}%")
 
-    query += f" ORDER BY t.trust_score DESC LIMIT {limit}"
-    rows = con.execute(query, params).fetchall()
+    query += " ORDER BY t.trust_score DESC LIMIT ?"
+    params.append(limit)
 
+    rows = con.execute(query, params).fetchall()
     return [
         {
             "id":             r[0],
@@ -267,10 +280,81 @@ def list_suppliers(
     ]
 
 
-@app.get("/supplier/{supplier_id}", response_model=TrustScoreResponse)
-def get_supplier(supplier_id: str, request: Request, key: str = Depends(get_api_key)):
+@v1.get("/supplier/{supplier_id}", response_model=TrustScoreResponse)
+@limiter.limit("30/minute")
+def get_supplier(
+    supplier_id: str,
+    request: Request,
+):
     """Full trust profile for a single supplier."""
-    return score(ScoreRequest(supplier_id=supplier_id), request, key)
+    return _score_supplier_by_request(ScoreRequest(supplier_id=supplier_id[:100]))
+
+
+# ── Protected POST endpoints (X-API-Key required) ────────────────── #
+
+@v1.post("/score", response_model=TrustScoreResponse)
+@limiter.limit("10/minute")
+def score(req: ScoreRequest, request: Request, key: str = Depends(get_api_key)):
+    """Score a supplier by ID or name. Requires X-API-Key header."""
+    return _score_supplier_by_request(req)
+
+
+@v1.post("/procure/evaluate")
+@limiter.limit("5/minute")
+def procure_evaluate(req: ProcureRequest, request: Request, key: str = Depends(get_api_key)):
+    """
+    AI Procurement Decision Engine.
+
+    An AI micro-business sends procurement criteria; this endpoint queries
+    the trust database, applies hard filters, ranks results, and returns
+    a list of approved suppliers with rationale.
+
+    Example:
+        {
+          "category": "organic cotton tote bags",
+          "min_trust_score": 80,
+          "required_certs": ["gots"],
+          "country_prefer": ["India", "Turkey"],
+          "max_results": 3
+        }
+    """
+    criteria = ProcurementCriteria(
+        category=req.category,
+        min_trust_score=req.min_trust_score,
+        required_certs=req.required_certs,
+        country_prefer=req.country_prefer,
+        country_exclude=req.country_exclude,
+        max_days_inactive=req.max_days_inactive,
+        max_results=req.max_results,
+    )
+    engine   = DecisionEngine(con)
+    decision = engine.evaluate(criteria)
+
+    return {
+        "approved":           decision.approved,
+        "category":           decision.category,
+        "criteria_used":      decision.criteria_used,
+        "decision_rationale": decision.decision_rationale,
+        "fallback_message":   decision.fallback_message,
+        "matched_suppliers": [
+            {
+                "supplier_id":              m.supplier_id,
+                "supplier_name":            m.supplier_name,
+                "country":                  m.country,
+                "trust_score":              m.trust_score,
+                "rank_score":               round(m.rank_score, 2),
+                "risk_flags":               m.risk_flags,
+                "certification_status":     m.certification_status,
+                "shipment_count":           m.shipment_count,
+                "days_since_last_shipment": m.days_since_last_shipment,
+                "match_reasons":            m.match_reasons,
+            }
+            for m in decision.matched_suppliers
+        ],
+    }
+
+
+app.include_router(v1)
 
 
 if __name__ == "__main__":

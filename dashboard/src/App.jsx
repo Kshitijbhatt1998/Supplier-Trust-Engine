@@ -20,21 +20,16 @@ export default function App() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const data = await api.suppliers(filters);
+      const [data, s] = await Promise.all([
+        api.suppliers(filters),
+        api.stats(),
+      ]);
       setSuppliers(data);
-
-      // Derived stats (ideally from a separate endpoint, but we'll calculate here for now)
-      const total = data.length;
-      const avg = total > 0 ? (data.reduce((acc, s) => acc + s.trust_score, 0) / total).toFixed(1) : 0;
-      const lowCount = data.filter(s => s.trust_score < 40).length;
-
-      // Note: verifiedCerts would need a meta endpoint or full fetch. 
-      // For this demo, let's just use a fixed number or random-ish for now if not available.
       setStats({
-        totalSuppliers: total,
-        avgScore: avg,
-        verifiedCerts: 42, // Simulated for now
-        riskAlerts: lowCount,
+        totalSuppliers: s.total_suppliers,
+        avgScore: s.avg_trust_score,
+        verifiedCerts: s.valid_cert_count,
+        riskAlerts: s.risk_alerts,
       });
     } catch (err) {
       console.error(err);

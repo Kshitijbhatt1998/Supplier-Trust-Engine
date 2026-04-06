@@ -92,42 +92,64 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
         );
     """)
 
+    # Indexes on hot query paths
+    con.execute("CREATE INDEX IF NOT EXISTS idx_trust_score     ON trust_scores(trust_score)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_trust_supplier  ON trust_scores(supplier_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_supplier_country ON suppliers(country)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_cert_supplier   ON certifications(supplier_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_cert_status     ON certifications(status)")
+
     logger.info(f"Database initialized at {db_path}")
     return con
 
 
 def upsert_supplier(con: duckdb.DuckDBPyConnection, supplier: dict) -> None:
-    """Insert or update a supplier record."""
-    con.execute("""
-        INSERT INTO suppliers (
-            id, name, country, address, shipment_count,
-            avg_monthly_shipments, total_buyers, hs_codes,
-            top_buyers, first_shipment_date, last_shipment_date,
-            source, raw_url
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (id) DO UPDATE SET
-            shipment_count = excluded.shipment_count,
-            avg_monthly_shipments = excluded.avg_monthly_shipments,
-            total_buyers = excluded.total_buyers,
-            hs_codes = excluded.hs_codes,
-            top_buyers = excluded.top_buyers,
-            last_shipment_date = excluded.last_shipment_date,
-            scraped_at = NOW()
-    """, [
-        supplier.get("id"),
-        supplier.get("name"),
-        supplier.get("country"),
-        supplier.get("address"),
-        supplier.get("shipment_count"),
-        supplier.get("avg_monthly_shipments"),
-        supplier.get("total_buyers"),
-        supplier.get("hs_codes", []),
-        supplier.get("top_buyers", []),
-        supplier.get("first_shipment_date"),
-        supplier.get("last_shipment_date"),
-        supplier.get("source"),
-        supplier.get("raw_url"),
-    ])
+    """Insert or update a supplier record.
+
+    DuckDB 0.x does not support updating VARCHAR[] (list) columns via
+    ON CONFLICT DO UPDATE, so we INSERT on first seen and UPDATE scalar
+    stats on re-scrape. hs_codes/top_buyers are stable per supplier and
+    are only written on the initial insert.
+    """
+    try:
+        con.execute("""
+            INSERT INTO suppliers (
+                id, name, country, address, shipment_count,
+                avg_monthly_shipments, total_buyers, hs_codes,
+                top_buyers, first_shipment_date, last_shipment_date,
+                source, raw_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            supplier.get("id"),
+            supplier.get("name"),
+            supplier.get("country"),
+            supplier.get("address"),
+            supplier.get("shipment_count"),
+            supplier.get("avg_monthly_shipments"),
+            supplier.get("total_buyers"),
+            supplier.get("hs_codes", []),
+            supplier.get("top_buyers", []),
+            supplier.get("first_shipment_date"),
+            supplier.get("last_shipment_date"),
+            supplier.get("source"),
+            supplier.get("raw_url"),
+        ])
+    except duckdb.ConstraintException:
+        con.execute("""
+            UPDATE suppliers SET
+                shipment_count        = ?,
+                avg_monthly_shipments = ?,
+                total_buyers          = ?,
+                last_shipment_date    = ?,
+                scraped_at            = NOW()
+            WHERE id = ?
+        """, [
+            supplier.get("shipment_count"),
+            supplier.get("avg_monthly_shipments"),
+            supplier.get("total_buyers"),
+            supplier.get("last_shipment_date"),
+            supplier.get("id"),
+        ])
 
 
 def upsert_certification(con: duckdb.DuckDBPyConnection, cert: dict) -> None:

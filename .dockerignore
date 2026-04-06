@@ -1,0 +1,17 @@
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.env
+.git/
+.github/
+.pytest_cache/
+dashboard/node_modules/
+dashboard/dist/
+data/*.duckdb
+data/*.wal
+data/.importyeti_session.json
+test_output*.txt
+notebooks/
+Supplier-Trust-Engine/
