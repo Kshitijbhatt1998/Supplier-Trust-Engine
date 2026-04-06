@@ -173,11 +173,21 @@ def _score_supplier_by_request(req: ScoreRequest) -> TrustScoreResponse:
             raise HTTPException(404, f"Supplier not found: {req.supplier_name} (Best match score: {res.get('match_score', 0):.1f})")
             
         if not res.get('is_verified'):
+            # Fetch preview data for the candidate to help the user verify
+            cand_id = res.get('supplier_id')
+            cand_profile = con.execute("""
+                SELECT trust_score, shap_flags_json 
+                FROM trust_scores WHERE supplier_id = ?
+            """, [cand_id]).fetchone()
+            
             res_metadata = {
                 'match_type': res.get('match_type'),
                 'match_score': res.get('match_score'),
                 'canonical_name': res.get('canonical_name'),
-                'is_subsidiary_warning': res.get('is_subsidiary_warning')
+                'is_subsidiary_warning': res.get('is_subsidiary_warning'),
+                'low_confidence': res.get('low_confidence', False),
+                'preview_score': cand_profile[0] if cand_profile else 0,
+                'preview_flags': json.loads(cand_profile[1]) if cand_profile and cand_profile[1] else []
             }
 
         row = con.execute(

@@ -164,23 +164,44 @@ export default function ProcurementSimulator() {
             </div>
           )}
 
-          {/* Fuzzy Match Confirmation */}
+          {/* Fuzzy Match Confirmation / HITL Prompt */}
           {fuzzyMatch && (
-            <div className="fuzzy-prompt card" style={{ marginTop: 24, padding: 16, border: '1px solid var(--blue)', background: 'var(--blue-glass)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className={`fuzzy-prompt card ${fuzzyMatch.resolution_metadata.low_confidence ? 'low-conf' : 'high-conf'}`} 
+                 style={{ 
+                   marginTop: 24, 
+                   padding: 16, 
+                   border: `1px solid ${fuzzyMatch.resolution_metadata.low_confidence ? 'var(--orange)' : 'var(--blue)'}`, 
+                   background: fuzzyMatch.resolution_metadata.low_confidence ? 'var(--orange-glass)' : 'var(--blue-glass)' 
+                 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
-                  <h4 style={{ margin: 0, color: 'var(--blue)' }}>Did you mean...?</h4>
-                  <p style={{ margin: '8px 0 0', fontSize: 13, opacity: 0.8 }}>
-                    We found <strong>{fuzzyMatch.resolution_metadata.canonical_name}</strong> which closely matches your search.
-                    {fuzzyMatch.resolution_metadata.is_subsidiary_warning && (
-                      <span style={{ color: 'var(--orange)', display: 'block', marginTop: 4 }}>
-                        ⚠ <strong>Subsidiary Warning:</strong> This potentially indicates a regional unit or subsidiary.
-                      </span>
-                    )}
+                  <h4 style={{ margin: 0, color: fuzzyMatch.resolution_metadata.low_confidence ? 'var(--orange)' : 'var(--blue)' }}>
+                    {fuzzyMatch.resolution_metadata.low_confidence ? '⚠ Partial Match Found' : '✨ Did you mean...?'}
+                  </h4>
+                  <p style={{ margin: '8px 0 0', fontSize: 13, opacity: 0.9 }}>
+                    You searched for <strong>"{individualSearch}"</strong>. 
+                    We found <strong>{fuzzyMatch.resolution_metadata.canonical_name}</strong> ({Math.round(fuzzyMatch.resolution_metadata.match_score)}% match).
                   </p>
-                </div>
-                <div className={`score-badge s-${scoreColor(fuzzyMatch.trust_score)}`}>
-                  {fuzzyMatch.trust_score}
+                  
+                  {/* Data-Rich Preview for HITL */}
+                  <div className="hitl-preview" style={{ marginTop: 12, padding: 8, background: 'var(--glass)', borderRadius: 4 }}>
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                       <div className={`preview-score s-${scoreColor(fuzzyMatch.resolution_metadata.preview_score)}`} style={{ fontWeight: 600 }}>
+                         {fuzzyMatch.resolution_metadata.preview_score}
+                       </div>
+                       <div className="preview-flags" style={{ display: 'flex', gap: 4 }}>
+                         {fuzzyMatch.resolution_metadata.preview_flags.slice(0, 2).map((f, i) => (
+                           <span key={i} className="reason-chip" style={{ fontSize: 10, padding: '1px 6px' }}>{f}</span>
+                         ))}
+                       </div>
+                    </div>
+                  </div>
+
+                  {fuzzyMatch.resolution_metadata.is_subsidiary_warning && (
+                    <span style={{ color: 'var(--orange)', display: 'block', marginTop: 8, fontSize: 12 }}>
+                      ⚠ <strong>Subsidiary Warning:</strong> This potentially indicates a regional unit or specific subsidiary.
+                    </span>
+                  )}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>

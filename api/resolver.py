@@ -162,14 +162,23 @@ class EntityResolver:
                     'match_score': score,
                     'match_type': 'fuzzy',
                     'is_verified': False,
-                    'is_subsidiary_warning': has_location_diff
+                    'is_subsidiary_warning': has_location_diff,
+                    'low_confidence': score < 85.0
                 }
 
         # --- Step 4: Logic Decision & Registration ---
         THRESHOLD = 85.0
-        if best_match and best_score >= THRESHOLD:
-            self._register_alias(name, normalized, best_match['supplier_id'], best_score, False)
-            return best_match
+        CLOSE_MISS_THRESHOLD = 75.0
+        
+        if best_match:
+            if best_score >= THRESHOLD:
+                # High Confidence: Auto-register/cache
+                self._register_alias(name, normalized, best_match['supplier_id'], best_score, False)
+                return best_match
+            elif best_score >= CLOSE_MISS_THRESHOLD:
+                # Close Miss: Surface but DO NOT cache yet (No Ghost Cache)
+                logger.info(f"ER Close Miss Surface: '{name}' -> {best_match['supplier_id']} ({best_score:.1f})")
+                return best_match
 
         return {'supplier_id': None, 'match_score': best_score}
 
