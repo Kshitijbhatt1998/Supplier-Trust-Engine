@@ -32,6 +32,7 @@ from model.features import engineer_features, MODEL_FEATURES
 from model.scorer import score_supplier
 from api.decision_engine import DecisionEngine, ProcurementCriteria
 from api.auth import get_api_key
+from api.resolver import EntityResolver
 
 
 # ------------------------------------------------------------------ #
@@ -155,9 +156,15 @@ def _score_supplier_by_request(req: ScoreRequest) -> TrustScoreResponse:
             "SELECT * FROM suppliers WHERE id = ?", [req.supplier_id]
         ).fetchone()
     else:
+        # Use EntityResolver for fuzzy name lookups
+        resolver = EntityResolver(con)
+        supplier_id, match_score, is_verified = resolver.resolve(req.supplier_name)
+        
+        if not supplier_id:
+            raise HTTPException(404, f"Supplier not found: {req.supplier_name} (Best match score: {match_score:.1f})")
+            
         row = con.execute(
-            "SELECT * FROM suppliers WHERE lower(name) LIKE lower(?)",
-            [f"%{req.supplier_name}%"],
+            "SELECT * FROM suppliers WHERE id = ?", [supplier_id]
         ).fetchone()
 
     if not row:

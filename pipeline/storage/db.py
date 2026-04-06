@@ -16,7 +16,9 @@ def get_db_path() -> str:
 def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
     """Initialize DuckDB with all required tables."""
     db_path = path or get_db_path()
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
 
     con = duckdb.connect(db_path)
 
@@ -92,12 +94,27 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
         );
     """)
 
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS entity_aliases (
+            id                  VARCHAR PRIMARY KEY,      -- sha256[:20] of lowercased raw_name
+            alias_name          VARCHAR NOT NULL,         -- raw name as seen on source
+            alias_normalized    VARCHAR NOT NULL,         -- normalized form (token-sorted)
+            canonical_id        VARCHAR,                  -- FK omitted: alias may be registered
+                                                          -- before the supplier row is inserted
+            source              VARCHAR,                  -- 'importyeti' | 'bol' | 'indiamart' | ...
+            match_score         FLOAT,                    -- 0–100; 100=exact/alias, 0=new entity
+            is_verified         BOOLEAN DEFAULT FALSE,    -- manual/trusted match flag
+            resolved_at         TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
     # Indexes on hot query paths
-    con.execute("CREATE INDEX IF NOT EXISTS idx_trust_score     ON trust_scores(trust_score)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_trust_supplier  ON trust_scores(supplier_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_trust_score      ON trust_scores(trust_score)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_trust_supplier   ON trust_scores(supplier_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_supplier_country ON suppliers(country)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_cert_supplier   ON certifications(supplier_id)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_cert_status     ON certifications(status)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_cert_supplier    ON certifications(supplier_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_cert_status      ON certifications(status)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_alias_norm       ON entity_aliases(alias_normalized)")
 
     logger.info(f"Database initialized at {db_path}")
     return con

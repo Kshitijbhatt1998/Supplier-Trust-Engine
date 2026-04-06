@@ -25,7 +25,8 @@ from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from playwright.async_api import async_playwright, Page, BrowserContext
-from pipeline.storage.db import init_db, upsert_supplier
+from pipeline.storage.db import init_db
+from pipeline.entity_resolution import resolve_and_upsert
 
 
 # Textile-relevant HS code prefixes to seed discovery
@@ -287,9 +288,10 @@ class ImportYetiScraper:
             for path in all_paths:
                 data = await self._scrape_supplier(page, path)
                 if data:
-                    upsert_supplier(self.con, data)
+                    result = resolve_and_upsert(self.con, data)
                     scraped += 1
-                    logger.success(f"  ✓ {data['name']} ({data['country']}) — {data['shipment_count']} shipments")
+                    tag = "new" if result.is_new else f"→ {result.canonical_id}"
+                    logger.success(f"  ✓ {data['name']} ({data['country']}) [{tag}] — {data['shipment_count']} shipments")
                 else:
                     failed += 1
 
