@@ -92,12 +92,26 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
         );
     """)
 
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS entity_aliases (
+            id                  VARCHAR PRIMARY KEY,      -- sha256[:20] of lowercased raw_name
+            alias_name          VARCHAR NOT NULL,         -- raw name as seen on source
+            alias_normalized    VARCHAR NOT NULL,         -- normalized form (token-sorted)
+            canonical_id        VARCHAR,                  -- FK omitted: alias may be registered
+                                                          -- before the supplier row is inserted
+            source              VARCHAR,                  -- 'importyeti' | 'bol' | 'indiamart' | ...
+            match_score         FLOAT,                    -- 0–100; 100=exact/alias, 0=new entity
+            resolved_at         TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
     # Indexes on hot query paths
-    con.execute("CREATE INDEX IF NOT EXISTS idx_trust_score     ON trust_scores(trust_score)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_trust_supplier  ON trust_scores(supplier_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_trust_score      ON trust_scores(trust_score)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_trust_supplier   ON trust_scores(supplier_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_supplier_country ON suppliers(country)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_cert_supplier   ON certifications(supplier_id)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_cert_status     ON certifications(status)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_cert_supplier    ON certifications(supplier_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_cert_status      ON certifications(status)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_alias_norm       ON entity_aliases(alias_normalized)")
 
     logger.info(f"Database initialized at {db_path}")
     return con
