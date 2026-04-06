@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import { scoreColor, flagShort } from '../utils'
+import { scoreColor } from '../utils'
 
 export default function SupplierModal({ supplierId, supplierName, onClose }) {
   const [data, setData] = useState(null)
@@ -82,7 +82,9 @@ export default function SupplierModal({ supplierId, supplierName, onClose }) {
                 <div className="stat-card-label" style={{ fontSize: '9px' }}>Manifest Evidence</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
                   <div className="stat-card-value" style={{ fontSize: '18px', margin: 0, color: 'var(--accent)' }}>
-                    {(data.trade_proof?.manifest_verification_score * 100).toFixed(0)}%
+                    {data.trade_proof?.manifest_verification_score != null
+                      ? `${(data.trade_proof.manifest_verification_score * 100).toFixed(0)}%`
+                      : '—'}
                   </div>
                   <div className="tag tag-accent" style={{ fontSize: '9px' }}>Verified</div>
                 </div>

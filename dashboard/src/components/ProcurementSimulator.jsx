@@ -5,6 +5,7 @@ import { scoreColor, flagShort } from '../utils';
 export default function ProcurementSimulator() {
   const [loading, setLoading] = useState(false);
   const [decision, setDecision] = useState(null);
+  const [error, setError] = useState(null);
   const [formData, setFormData] = useState({
     category: 'organic cotton fabrics',
     min_trust_score: 75,
@@ -16,11 +17,12 @@ export default function ProcurementSimulator() {
     e.preventDefault();
     setLoading(true);
     setDecision(null);
+    setError(null);
     try {
       const result = await api.procure(formData);
       setDecision(result);
     } catch (err) {
-      console.error(err);
+      setError(err.message || 'Decision engine unavailable');
     } finally {
       setLoading(false);
     }
@@ -84,6 +86,12 @@ export default function ProcurementSimulator() {
             </button>
           </div>
         </form>
+
+        {error && (
+          <div style={{ marginTop: 16, color: 'var(--red)', fontSize: 13 }}>
+            ⚠ {error}
+          </div>
+        )}
 
         {decision && (
           <div style={{ marginTop: 24 }}>
