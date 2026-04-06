@@ -52,3 +52,6 @@ test_output*.txt
 
 # Large files
 llvmlite.dll
+
+# Nested repo — old project root, not a real submodule
+Supplier-Trust-Engine/
