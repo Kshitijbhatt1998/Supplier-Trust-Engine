@@ -33,13 +33,31 @@ def test_resolution():
         ("India Welspun", "welspun-india"),
     ]
     for q_name, expected_id in queries:
-        res_id, score, verified = resolver.resolve(q_name, country='India')
+        res = resolver.resolve(q_name, country='India')
+        res_id = res.get('supplier_id')
+        score = res.get('match_score')
+        verified = res.get('is_verified')
         print(f"  Query: '{q_name}' -> Resolved ID: {res_id} (Score: {score:.1f}, Verified: {verified}) {'[OK]' if res_id == expected_id else '[FAIL]'}")
 
-    # 4. Test Fast Path (Cache)
+    # 4. Test Protected Terms (Over-stripping)
+    print("\nTesting Protected Terms:")
+    # "Limited Brands" should normalize to "brands limited", not empty or just one token
+    norm = resolver.normalize("Limited Brands")
+    print(f"  'Limited Brands' -> '{norm}' {'[OK]' if 'brands' in norm and 'limited' in norm else '[FAIL]'}")
+
+    # 5. Test Subsidiary Detection
+    print("\nTesting Subsidiary Detection:")
+    con.execute("INSERT INTO suppliers (id, name, country) VALUES ('welspun-gujarat', 'Welspun Gujarat Unit', 'India')")
+    
+    # Matching "Welspun Vapi" against "Welspun Gujarat Unit"
+    res = resolver.resolve("Welspun Vapi", country='India')
+    print(f"  Query: 'Welspun Vapi' -> Best: {res.get('canonical_name')} (Score: {res.get('match_score'):.1f})")
+    print(f"  Subsidiary Warning: {res.get('is_subsidiary_warning')} {'[OK]' if res.get('is_subsidiary_warning') else '[FAIL]'}")
+
+    # 6. Test Fast Path (Cache)
     print("\nTesting Fast Path (Cache):")
-    res_id, score, verified = resolver.resolve("Welspun", country='India')
-    print(f"  Second Query: 'Welspun' -> {res_id} (Score: {score:.1f})")
+    res = resolver.resolve("Welspun", country='India')
+    print(f"  Second Query: 'Welspun' -> {res.get('canonical_name')} (Score: {res.get('match_score'):.1f})")
     
     # Check if registered in entity_aliases
     alias = con.execute("SELECT * FROM entity_aliases WHERE alias_normalized = 'welspun'").fetchone()

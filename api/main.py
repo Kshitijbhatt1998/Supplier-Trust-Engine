@@ -116,6 +116,11 @@ class ScoreRequest(BaseModel):
     supplier_name: Optional[str] = Field(None, max_length=200)
 
 
+class FeedbackRequest(BaseModel):
+    supplier_name: str = Field(..., max_length=200)
+    canonical_id:  str = Field(..., max_length=100)
+
+
 class TrustScoreResponse(BaseModel):
     supplier_id:          str
     supplier_name:        str
@@ -126,6 +131,7 @@ class TrustScoreResponse(BaseModel):
     certification_status: dict
     shipment_summary:     dict
     trade_proof:          dict
+    resolution_metadata:  Optional[dict] = None
 
 
 class ProcureRequest(BaseModel):
@@ -151,6 +157,8 @@ def _score_supplier_by_request(req: ScoreRequest) -> TrustScoreResponse:
     if not req.supplier_id and not req.supplier_name:
         raise HTTPException(400, "Provide supplier_id or supplier_name")
 
+    res_metadata = None
+
     if req.supplier_id:
         row = con.execute(
             "SELECT * FROM suppliers WHERE id = ?", [req.supplier_id]
@@ -158,11 +166,20 @@ def _score_supplier_by_request(req: ScoreRequest) -> TrustScoreResponse:
     else:
         # Use EntityResolver for fuzzy name lookups
         resolver = EntityResolver(con)
-        supplier_id, match_score, is_verified = resolver.resolve(req.supplier_name)
+        res = resolver.resolve(req.supplier_name)
+        supplier_id = res.get('supplier_id')
         
         if not supplier_id:
-            raise HTTPException(404, f"Supplier not found: {req.supplier_name} (Best match score: {match_score:.1f})")
+            raise HTTPException(404, f"Supplier not found: {req.supplier_name} (Best match score: {res.get('match_score', 0):.1f})")
             
+        if not res.get('is_verified'):
+            res_metadata = {
+                'match_type': res.get('match_type'),
+                'match_score': res.get('match_score'),
+                'canonical_name': res.get('canonical_name'),
+                'is_subsidiary_warning': res.get('is_subsidiary_warning')
+            }
+
         row = con.execute(
             "SELECT * FROM suppliers WHERE id = ?", [supplier_id]
         ).fetchone()
@@ -216,6 +233,7 @@ def _score_supplier_by_request(req: ScoreRequest) -> TrustScoreResponse:
             "manifest_verification_score": features.get("manifest_verification_score", 0),
             "national_market_share":       features.get("national_market_share", 0),
         },
+        resolution_metadata=res_metadata
     )
 
 
@@ -359,6 +377,34 @@ def procure_evaluate(req: ProcureRequest, request: Request, key: str = Depends(g
             for m in decision.matched_suppliers
         ],
     }
+
+
+@v1.post("/resolver/feedback")
+@limiter.limit("20/minute")
+def resolver_feedback(req: FeedbackRequest, request: Request, key: str = Depends(get_api_key)):
+    """
+    User feedback for fuzzy matches. Increments suggestion_count and
+    auto-promotes to is_verified=True if threshold reached.
+    """
+    resolver = EntityResolver(con)
+    normalized = resolver.normalize(req.supplier_name)
+    
+    # Update suggestion count
+    con.execute("""
+        UPDATE entity_aliases 
+        SET suggestion_count = suggestion_count + 1,
+            resolved_at = NOW()
+        WHERE alias_normalized = ? AND canonical_id = ?
+    """, [normalized, req.canonical_id])
+    
+    # Auto-promotion logic (e.g. 3 confirmations)
+    con.execute("""
+        UPDATE entity_aliases
+        SET is_verified = TRUE
+        WHERE alias_normalized = ? AND canonical_id = ? AND suggestion_count >= 3
+    """, [normalized, req.canonical_id])
+    
+    return {"status": "success", "message": "Feedback recorded"}
 
 
 app.include_router(v1)

@@ -38,4 +38,5 @@ export const api = {
   },
   score:     (body)         => request('/score',            { method: 'POST', body: JSON.stringify(body) }),
   procure:   (body)         => request('/procure/evaluate', { method: 'POST', body: JSON.stringify(body) }),
+  feedback:  (body)         => request('/resolver/feedback', { method: 'POST', body: JSON.stringify(body) }),
 }
