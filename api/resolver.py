@@ -131,7 +131,13 @@ class EntityResolver:
                 'is_subsidiary_warning': False
             }
 
-        # --- Step 3: Fuzzy Scan (Blocked by Country) ---
+        # --- Step 3: Fuzzy Scan (Blocked by Country & Negative Feedback) ---
+        rejection_rows = self.con.execute(
+            "SELECT canonical_id FROM entity_rejections WHERE alias_normalized = ?",
+            [normalized]
+        ).fetchall()
+        rejections = {row[0] for row in rejection_rows}
+
         query = "SELECT id, name FROM suppliers"
         params = []
         if country:
@@ -143,42 +149,38 @@ class EntityResolver:
         best_match = None
         best_score = 0.0
 
-        input_tokens = set(normalized.split())
-
         for s_id, s_name in candidates:
+            # Skip previously rejected pairs
+            if s_id in rejections:
+                continue
+                
             cand_norm = self.normalize(s_name)
             score = fuzz.WRatio(normalized, cand_norm)
             
             if score > best_score:
-                # Subsidiary detection (Token Difference check)
-                cand_tokens = set(cand_norm.split())
-                diff = input_tokens.symmetric_difference(cand_tokens)
-                has_location_diff = any(t in self.LOCATION_TOKENS for t in diff)
+                # Subsidiary detection (Token Difference)
+                diff = set(normalized.split()).symmetric_difference(set(cand_norm.split()))
+                is_sub = any(t in self.LOCATION_TOKENS for t in diff)
                 
                 best_score = score
                 best_match = {
                     'supplier_id': s_id,
                     'canonical_name': s_name,
                     'match_score': score,
-                    'match_type': 'fuzzy',
                     'is_verified': False,
-                    'is_subsidiary_warning': has_location_diff,
+                    'is_subsidiary_warning': is_sub,
                     'low_confidence': score < 85.0
                 }
 
         # --- Step 4: Logic Decision & Registration ---
         THRESHOLD = 85.0
-        CLOSE_MISS_THRESHOLD = 75.0
+        MIN_THRESHOLD = 75.0
         
-        if best_match:
+        if best_match and best_score >= MIN_THRESHOLD:
             if best_score >= THRESHOLD:
-                # High Confidence: Auto-register/cache
+                # High Confidence: Auto-register
                 self._register_alias(name, normalized, best_match['supplier_id'], best_score, False)
-                return best_match
-            elif best_score >= CLOSE_MISS_THRESHOLD:
-                # Close Miss: Surface but DO NOT cache yet (No Ghost Cache)
-                logger.info(f"ER Close Miss Surface: '{name}' -> {best_match['supplier_id']} ({best_score:.1f})")
-                return best_match
+            return best_match
 
         return {'supplier_id': None, 'match_score': best_score}
 

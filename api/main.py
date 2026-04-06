@@ -119,6 +119,8 @@ class ScoreRequest(BaseModel):
 class FeedbackRequest(BaseModel):
     supplier_name: str = Field(..., max_length=200)
     canonical_id:  str = Field(..., max_length=100)
+    is_confirmed:  bool = True
+    reason_code:   Optional[str] = None
 
 
 class TrustScoreResponse(BaseModel):
@@ -393,26 +395,35 @@ def procure_evaluate(req: ProcureRequest, request: Request, key: str = Depends(g
 @limiter.limit("20/minute")
 def resolver_feedback(req: FeedbackRequest, request: Request, key: str = Depends(get_api_key)):
     """
-    User feedback for fuzzy matches. Increments suggestion_count and
-    auto-promotes to is_verified=True if threshold reached.
+    User feedback loop. 
+    If confirmed=True: Increment suggestion_count and potentially promote alias.
+    If confirmed=False: Add to rejections list to prevent future suggestions.
     """
     resolver = EntityResolver(con)
     normalized = resolver.normalize(req.supplier_name)
     
-    # Update suggestion count
-    con.execute("""
-        UPDATE entity_aliases 
-        SET suggestion_count = suggestion_count + 1,
-            resolved_at = NOW()
-        WHERE alias_normalized = ? AND canonical_id = ?
-    """, [normalized, req.canonical_id])
-    
-    # Auto-promotion logic (e.g. 3 confirmations)
-    con.execute("""
-        UPDATE entity_aliases
-        SET is_verified = TRUE
-        WHERE alias_normalized = ? AND canonical_id = ? AND suggestion_count >= 3
-    """, [normalized, req.canonical_id])
+    if req.is_confirmed:
+        # Positive feedback
+        con.execute("""
+            UPDATE entity_aliases 
+            SET suggestion_count = suggestion_count + 1,
+                resolved_at = NOW()
+            WHERE alias_normalized = ? AND canonical_id = ?
+        """, [normalized, req.canonical_id])
+        
+        # Auto-promotion logic (e.g. 3 confirmations)
+        con.execute("""
+            UPDATE entity_aliases
+            SET is_verified = TRUE
+            WHERE alias_normalized = ? AND canonical_id = ? AND suggestion_count >= 3
+        """, [normalized, req.canonical_id])
+    else:
+        # Negative feedback: Add to rejections (using ON CONFLICT to ensure idempotency)
+        con.execute("""
+            INSERT INTO entity_rejections (alias_normalized, canonical_id, reason_code)
+            VALUES (?, ?, ?)
+            ON CONFLICT (alias_normalized, canonical_id) DO NOTHING
+        """, [normalized, req.canonical_id, req.reason_code or 'user_rejected'])
     
     return {"status": "success", "message": "Feedback recorded"}
 

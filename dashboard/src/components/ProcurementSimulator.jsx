@@ -55,17 +55,23 @@ export default function ProcurementSimulator() {
   };
 
   const confirmFuzzy = async (confirmed) => {
-    if (!confirmed) {
-      setFuzzyMatch(null);
-      return;
-    }
     setLoading(true);
     try {
-      await api.feedback({
-        supplier_name: individualSearch,
-        canonical_id: fuzzyMatch.supplier_id
-      });
-      setScoreResult(fuzzyMatch);
+      if (confirmed) {
+        await api.feedback({
+          supplier_name: individualSearch,
+          canonical_id: fuzzyMatch.supplier_id,
+          is_confirmed: true
+        });
+        setScoreResult(fuzzyMatch);
+      } else {
+        await api.feedback({
+          supplier_name: individualSearch,
+          canonical_id: fuzzyMatch.supplier_id,
+          is_confirmed: false,
+          reason_code: 'wrong_entity'
+        });
+      }
       setFuzzyMatch(null);
     } catch (err) {
       setError('Failed to record feedback');

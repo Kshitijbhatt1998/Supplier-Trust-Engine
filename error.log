@@ -1,0 +1,7 @@
+2026-04-06 20:49:56.955 | INFO     | pipeline.storage.db:init_db:131 - Database initialized at :memory:
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_negative_signal.py", line 55, in <module>
+    test_negative_signal()
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\tests\test_negative_signal.py", line 24, in test_negative_signal
+    con.execute("""
+duckdb.duckdb.ConstraintException: Constraint Error: NOT NULL constraint failed: entity_rejections.canonical_id

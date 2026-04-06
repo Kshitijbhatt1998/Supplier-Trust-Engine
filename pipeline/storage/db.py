@@ -16,9 +16,10 @@ def get_db_path() -> str:
 def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
     """Initialize DuckDB with all required tables."""
     db_path = path or get_db_path()
-    db_dir = os.path.dirname(db_path)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
+    if db_path != ":memory:":
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
 
     con = duckdb.connect(db_path)
 
@@ -106,6 +107,16 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
             suggestion_count    INTEGER DEFAULT 0,        -- crowdsourced hits for auto-promotion
             is_verified         BOOLEAN DEFAULT FALSE,    -- manual/trusted match flag
             resolved_at         TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS entity_rejections (
+            alias_normalized    VARCHAR NOT NULL,
+            canonical_id        VARCHAR NOT NULL,
+            reason_code         VARCHAR,              -- Optional: 'wrong_subsidiary', 'not_supplier'
+            rejected_at         TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (alias_normalized, canonical_id)
         );
     """)
 
