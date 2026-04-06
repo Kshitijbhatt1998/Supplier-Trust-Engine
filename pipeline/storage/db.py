@@ -103,6 +103,7 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
                                                           -- before the supplier row is inserted
             source              VARCHAR,                  -- 'importyeti' | 'bol' | 'indiamart' | ...
             match_score         FLOAT,                    -- 0–100; 100=exact/alias, 0=new entity
+            suggestion_count    INTEGER DEFAULT 0,        -- crowdsourced hits for auto-promotion
             is_verified         BOOLEAN DEFAULT FALSE,    -- manual/trusted match flag
             resolved_at         TIMESTAMP DEFAULT NOW()
         );
