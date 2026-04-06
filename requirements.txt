@@ -1,7 +1,7 @@
 playwright==1.44.0
 playwright-stealth==1.0.6
 scrapy==2.14.2
-duckdb==0.10.3
+duckdb==1.5.1
 pandas==2.2.2
 numpy==1.26.4
 lightgbm==4.6.0
