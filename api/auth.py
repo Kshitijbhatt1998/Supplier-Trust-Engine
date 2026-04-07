@@ -13,8 +13,22 @@ api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 ADMIN_TOKEN_NAME = "X-Admin-Token"
 admin_token_header = APIKeyHeader(name=ADMIN_TOKEN_NAME, auto_error=False)
 
-EXPECTED_API_KEY = os.getenv("API_KEY", "dev-trust-key-99")
-EXPECTED_ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "dev-admin-pass-123")
+_api_key = os.getenv("API_KEY")
+_admin_token = os.getenv("ADMIN_TOKEN")
+
+if not _api_key:
+    raise ValueError(
+        "API_KEY environment variable is not set. "
+        "Set a strong random value (e.g. openssl rand -hex 32) before starting the server."
+    )
+if not _admin_token:
+    raise ValueError(
+        "ADMIN_TOKEN environment variable is not set. "
+        "Set a strong random value (e.g. openssl rand -hex 32) before starting the server."
+    )
+
+EXPECTED_API_KEY: str = _api_key
+EXPECTED_ADMIN_TOKEN: str = _admin_token
 
 async def get_api_key(api_key_header: str = Security(api_key_header)):
     """Dependency to validate the general API key."""

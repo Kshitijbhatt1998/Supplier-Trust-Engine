@@ -13,6 +13,7 @@ Auth model:
 import os
 import json
 import uuid
+from enum import Enum
 from typing import Optional
 from contextlib import asynccontextmanager
 
@@ -99,6 +100,21 @@ app.add_middleware(
 
 
 # ------------------------------------------------------------------ #
+# Security headers middleware                                          #
+# ------------------------------------------------------------------ #
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Only set HSTS when running over TLS (nginx handles TLS termination in prod)
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+# ------------------------------------------------------------------ #
 # Global error handler — never expose stack traces                     #
 # ------------------------------------------------------------------ #
 @app.exception_handler(Exception)
@@ -126,8 +142,13 @@ class FeedbackRequest(BaseModel):
     reason_code:   Optional[str] = None
 
 
+class SupplierCategory(str, Enum):
+    textile  = "textile"
+    chemical = "chemical"
+
+
 class AdminActionRequest(BaseModel):
-    alias_ids:   list[str]
+    alias_ids:   list[str] = Field(..., max_length=200)
     action:      str # 'verify' or 'reject'
     reason_code: Optional[str] = None
 
@@ -295,7 +316,7 @@ def stats(request: Request):
 
 
 @v1.get("/suppliers")
-@limiter.limit("30/minute")
+@limiter.limit("5/minute")
 def list_suppliers(
     request: Request,
     min_score: float = Query(0, ge=0, le=100),
@@ -450,8 +471,8 @@ def resolver_feedback(req: FeedbackRequest, request: Request, key: str = Depends
 @limiter.limit("10/minute")
 def admin_review_queue(
     request:  Request,
-    key:      str            = Depends(get_admin_key),
-    category: Optional[str]  = Query(None, max_length=50),
+    key:      str                       = Depends(get_admin_key),
+    category: Optional[SupplierCategory] = Query(None),
 ):
     """
     Returns a prioritized queue of unverified aliases for human audit.
@@ -593,8 +614,8 @@ def admin_alias_action(req: AdminActionRequest, request: Request, key: str = Dep
 @limiter.limit("20/minute")
 def admin_audit_logs(
     request: Request,
-    key:      str = Depends(get_admin_key),
-    category: Optional[str] = Query(None)
+    key:      str                       = Depends(get_admin_key),
+    category: Optional[SupplierCategory] = Query(None),
 ):
     """Returns recent administrative actions."""
     query = """
@@ -645,6 +666,15 @@ def admin_undo(req: AdminUndoRequest, request: Request, key: str = Depends(get_a
     alias_ids = json.loads(log[1])
     snapshot = json.loads(log[2])
 
+    # Validate snapshot schema before using it for restoration
+    if not isinstance(snapshot, dict) or snapshot.get("version") != 1:
+        raise HTTPException(400, "Snapshot format is invalid or unsupported")
+    snap_items = snapshot.get("data", [])
+    _REQUIRED_SNAP_KEYS = {"id", "name", "normalized", "canonical_id", "score", "count", "category"}
+    for item in snap_items:
+        if not isinstance(item, dict) or not _REQUIRED_SNAP_KEYS.issubset(item.keys()):
+            raise HTTPException(400, "Snapshot data is malformed; cannot safely undo")
+
     try:
         con.execute("BEGIN TRANSACTION")
 
@@ -683,8 +713,8 @@ def admin_undo(req: AdminUndoRequest, request: Request, key: str = Depends(get_a
 
     except Exception as e:
         con.execute("ROLLBACK")
-        logger.error(f"Undo failed: {e}")
-        raise HTTPException(500, f"Undo failed: {str(e)}")
+        logger.error(f"Undo failed for audit_id={req.audit_id}: {e}")
+        raise HTTPException(500, "Undo operation failed. Check server logs.")
 
 
 app.include_router(v1)
