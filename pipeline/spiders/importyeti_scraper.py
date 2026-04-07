@@ -239,6 +239,33 @@ class ImportYetiScraper:
                 continue
         return None
 
+
+    async def scrape_supplier_by_name(self, page: Page, name: str) -> Optional[dict]:
+        """
+        Search for a company by name and scrape its details.
+        Used for real-time triggers.
+        """
+        logger.info(f"🚀 Real-time trigger for: {name}")
+        search_url = f"{self.BASE_URL}/search?q={name}&type=supplier"
+        
+        try:
+            await page.goto(search_url, wait_until="networkidle")
+            await asyncio.sleep(random_delay(1, 2))
+            
+            # Click the first relative company link
+            # Selector should be robust enough to pick the primary result
+            first_result = await page.query_selector("a[href^='/company/']")
+            if not first_result:
+                logger.warning(f"No results found for {name}")
+                return None
+                
+            path = await first_result.get_attribute("href")
+            return await self._scrape_supplier(page, path)
+            
+        except Exception as e:
+            logger.error(f"Failed to trigger on-demand scrape for {name}: {e}")
+            return None
+
     # ------------------------------------------------------------------ #
     # Main orchestration                                                    #
     # ------------------------------------------------------------------ #

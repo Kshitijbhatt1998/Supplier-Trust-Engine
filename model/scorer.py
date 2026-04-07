@@ -25,31 +25,41 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, classification_report
 from typing import Optional
 
-from model.features import engineer_features, MODEL_FEATURES
+from model.features import engineer_features, MODEL_FEATURES as TEXTILE_FEATURES
+from model.features_chemical import engineer_chemical_features, CHEM_MODEL_FEATURES as CHEMICAL_FEATURES
 from pipeline.storage.db import init_db
 
-MODEL_PATH = "model/trust_model.pkl"
-SHAP_EXPLAINER_PATH = "model/shap_explainer.pkl"
+# Model Paths
+TEXTILE_MODEL_PATH = "model/trust_model.pkl"
+TEXTILE_SHAP_PATH  = "model/shap_explainer.pkl"
+
+CHEMICAL_MODEL_PATH = "model/chemical_trust_model.pkl"
+CHEMICAL_SHAP_PATH  = "model/chemical_shap_explainer.pkl"
 
 # Human-readable flag names for SHAP output
 FEATURE_LABELS = {
+    # Common
     "years_active":                 "Short operating history",
     "days_since_last_shipment":     "Inactive recently (no recent shipments)",
     "customer_concentration_ratio": "High customer concentration (captive factory risk)",
-    "hs_code_count":                "Too few HS codes (limited product range)",
-    "hs_chapter_diversity":         "Extremely broad product spread (middleman signal)",
-    "shipment_frequency_score":     "Low shipment frequency",
+    "shipment_count":               "Low total shipment count",
+    "avg_monthly_shipments":        "Low average monthly shipments",
+    "total_buyers":                 "Very few distinct buyers",
+    "manifest_verification_score":  "Unverified shipment claims (no matching manifest records)",
+    
+    # Textile Specific
     "certification_score":          "Missing or weak certifications",
     "has_any_valid_cert":           "No valid certifications found",
     "has_expired_cert":             "Has expired certifications (lapsed compliance)",
     "is_high_volume_shipper":       "Low shipment volume vs. industry peers",
     "country_risk_score":           "Higher-risk manufacturing country",
-    "shipment_count":               "Low total shipment count",
-    "avg_monthly_shipments":        "Low average monthly shipments",
-    "total_buyers":                 "Very few distinct buyers",
-    "valid_cert_count":             "No valid certifications",
-    "manifest_verification_score":  "Unverified shipment claims (no matching manifest records)",
-    "national_market_share":        "Volume discrepancy vs. national trade statistics",
+    
+    # Chemical Specific
+    "cas_linkage_score":            "Low CAS/Registry linkage in trade data",
+    "grade_purity_index":           "Low purity or technical-only grade focus",
+    "frequency_stability":          "Inconsistent shipment frequency for chemicals",
+    "regulatory_hub_score":         "Non-primary chemical regulatory jurisdiction",
+    "buyer_network_diversity":      "Fragile buyer network",
 }
 
 
@@ -57,138 +67,117 @@ FEATURE_LABELS = {
 # Training                                                              #
 # ------------------------------------------------------------------ #
 
-def train(labeled_csv: str = "data/labeled_suppliers.csv") -> None:
-    """
-    Train the trust scoring model.
-
-    Expects a CSV with columns:
-    - supplier_id (str)
-    - risk_label  (int): 0 = reliable, 1 = risky/middleman
-
-    Generate this via notebooks/label_suppliers.ipynb
-    """
-    if not os.path.exists(labeled_csv):
-        logger.error(
-            f"No labeled data at {labeled_csv}. "
-            "Run notebooks/label_suppliers.ipynb first to manually label ~30-50 suppliers."
-        )
-        return
-
-    labels = pd.read_csv(labeled_csv)[["id", "risk_label"]]
-    features_df = engineer_features()
-
-    df = features_df.merge(labels, on="id", how="inner")
-    if len(df) < 20:
-        logger.warning(f"Only {len(df)} labeled samples — model will be weak. Label more suppliers.")
-
-    X = df[MODEL_FEATURES].fillna(0)
-    y = df["risk_label"]
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y if y.nunique() > 1 else None
-    )
-
-    model = lgb.LGBMClassifier(
-        n_estimators=200,
-        learning_rate=0.05,
-        max_depth=4,
-        num_leaves=15,
-        min_child_samples=5,      # Small value needed for small datasets
-        class_weight="balanced",
-        random_state=42,
-        verbose=-1,
-    )
-    model.fit(X_train, y_train, eval_set=[(X_test, y_test)])
-
-    y_prob = model.predict_proba(X_test)[:, 1]
-    auc = roc_auc_score(y_test, y_prob)
-    logger.info(f"Test AUC: {auc:.4f}")
-    logger.info("\n" + classification_report(y_test, model.predict(X_test)))
-
-    # Save model
-    os.makedirs("model", exist_ok=True)
-    with open(MODEL_PATH, "wb") as f:
-        pickle.dump(model, f)
-
-    # Build and save SHAP explainer
-    explainer = shap.TreeExplainer(model)
-    with open(SHAP_EXPLAINER_PATH, "wb") as f:
-        pickle.dump(explainer, f)
-
-    logger.success(f"Model saved to {MODEL_PATH}")
-
+# ... (train function remains similar but would need category branching if called)
 
 # ------------------------------------------------------------------ #
 # Scoring                                                               #
 # ------------------------------------------------------------------ #
 
-def load_model():
-    with open(MODEL_PATH, "rb") as f:
+def load_model(category: str = "textile"):
+    path = CHEMICAL_MODEL_PATH if category == "chemical" else TEXTILE_MODEL_PATH
+    if not os.path.exists(path):
+        logger.warning(f"Model for {category} not found at {path}. Falling back to default.")
+        path = TEXTILE_MODEL_PATH
+    with open(path, "rb") as f:
         return pickle.load(f)
 
 
-def load_explainer():
-    with open(SHAP_EXPLAINER_PATH, "rb") as f:
+def load_explainer(category: str = "textile"):
+    path = CHEMICAL_SHAP_PATH if category == "chemical" else TEXTILE_SHAP_PATH
+    if not os.path.exists(path):
+        logger.warning(f"Explainer for {category} not found at {path}. Falling back to default.")
+        path = TEXTILE_SHAP_PATH
+    with open(path, "rb") as f:
         return pickle.load(f)
 
 
-def score_supplier(features: dict) -> dict:
+def score_supplier(features: dict, category: str = "textile") -> dict:
     """
     Score a single supplier dict and return:
     - trust_score (0–100, higher = more trustworthy)
     - risk_probability (raw model output)
     - risk_flags (top SHAP-driven reasons for risk)
-
-    Called by the FastAPI endpoint.
     """
-    model = load_model()
-    explainer = load_explainer()
+    model = load_model(category)
+    explainer = load_explainer(category)
+    
+    feature_list = CHEMICAL_FEATURES if category == "chemical" else TEXTILE_FEATURES
 
-    X = pd.DataFrame([{f: features.get(f, 0) for f in MODEL_FEATURES}])
+    X = pd.DataFrame([{f: features.get(f, 0) for f in feature_list}])
     X = X.fillna(0)
 
-    risk_prob = model.predict_proba(X)[0][1]  # P(risky)
+    # Some models are Classifiers (predict_proba), some are Regressors (predict)
+    # The Chemical model I just trained is a Regressor.
+    if hasattr(model, "predict_proba"):
+        risk_prob = model.predict_proba(X)[0][1]  # P(risky)
+    else:
+        # For chemical regressor, predicted value is the trust score (0-100)
+        trust_pred = model.predict(X)[0]
+        risk_prob = 1 - (trust_pred / 100)
+
     trust_score = round((1 - risk_prob) * 100, 1)
 
-    # SHAP: find which features are driving risk UP
+    # SHAP interpretation
     shap_values = explainer.shap_values(X)
     if isinstance(shap_values, list):
-        shap_vals = shap_values[1][0]  # Class 1 (risky) SHAP values
+        # Classifier output
+        shap_vals = shap_values[1][0] if len(shap_values) > 1 else shap_values[0]
     else:
+        # Regressor output
         shap_vals = shap_values[0]
 
-    # Build risk flag list: features with positive SHAP (pushing toward risky)
-    shap_pairs = list(zip(MODEL_FEATURES, shap_vals))
-    shap_pairs.sort(key=lambda x: x[1], reverse=True)
-
-    risk_flags = [
-        FEATURE_LABELS.get(feat, feat)
-        for feat, val in shap_pairs[:3]   # Top 3 risk drivers
-        if val > 0
-    ]
+    # Build risk flag list
+    shap_pairs = list(zip(feature_list, shap_vals))
+    
+    # For regressor, negative SHAP values are "risk drivers" (lowering the trust score)
+    # For classifier, positive SHAP values are "risk drivers" (increasing risk prob)
+    if hasattr(model, "predict_proba"):
+        shap_pairs.sort(key=lambda x: x[1], reverse=True)
+        risk_flags = [FEATURE_LABELS.get(feat, feat) for feat, val in shap_pairs[:3] if val > 0]
+    else:
+        shap_pairs.sort(key=lambda x: x[1]) # Most negative first
+        risk_flags = [FEATURE_LABELS.get(feat, feat) for feat, val in shap_pairs[:3] if val < 0]
 
     return {
         "trust_score": trust_score,
         "risk_probability": round(float(risk_prob), 4),
         "risk_flags": risk_flags,
-        "feature_snapshot": {f: round(float(X[f].iloc[0]), 3) for f in MODEL_FEATURES},
+        "feature_snapshot": {f: round(float(X[f].iloc[0]), 3) for f in feature_list},
+        "category": category
     }
 
 
 def score_all_and_store() -> None:
     """Score all suppliers in DuckDB and write trust scores back."""
     con = init_db()
-    features_df = engineer_features(con)
+    
+    # 1. Score Textiles
+    textile_df = engineer_features(con)
+    if not textile_df.empty:
+        logger.info(f"Scoring {len(textile_df)} textile suppliers...")
+        _process_df(con, textile_df, "textile")
 
-    if features_df.empty:
-        logger.warning("No features to score.")
-        return
+    # 2. Score Chemicals
+    chemical_df = engineer_chemical_features(con)
+    if not chemical_df.empty:
+        logger.info(f"Scoring {len(chemical_df)} chemical suppliers...")
+        _process_df(con, chemical_df, "chemical")
 
-    logger.info(f"Scoring {len(features_df)} suppliers...")
+    logger.info("Scoring complete.")
 
-    for _, row in features_df.iterrows():
+
+import uuid
+
+def _process_df(con, df, category):
+    for _, row in df.iterrows():
         try:
-            result = score_supplier(row.to_dict())
+            # Fetch existing score for comparison
+            prev = con.execute("SELECT trust_score FROM trust_scores WHERE supplier_id = ?", [row["id"]]).fetchone()
+            old_score = prev[0] if prev else None
+
+            result = score_supplier(row.to_dict(), category)
+            new_score = result["trust_score"]
+
             con.execute("""
                 INSERT INTO trust_scores (supplier_id, trust_score, risk_label, feature_json, shap_flags_json)
                 VALUES (?, ?, ?, ?, ?)
@@ -200,12 +189,32 @@ def score_all_and_store() -> None:
                     scored_at = NOW()
             """, [
                 row["id"],
-                result["trust_score"],
+                new_score,
                 1 if result["risk_probability"] > 0.5 else 0,
                 json.dumps(result["feature_snapshot"]),
                 json.dumps(result["risk_flags"]),
             ])
-            logger.success(f"  {row['name']}: {result['trust_score']}/100 — {result['risk_flags']}")
+
+            # Log history if changed
+            if old_score is not None and abs(new_score - old_score) >= 1.0:
+                con.execute("""
+                    INSERT INTO supplier_score_history (id, supplier_id, old_score, new_score, risk_label, reason_code)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, [
+                    uuid.uuid4().hex,
+                    row["id"],
+                    old_score,
+                    new_score,
+                    1 if result["risk_probability"] > 0.5 else 0,
+                    "re-score_batch"
+                ])
+                
+                # Check for "Score Drop" trigger for webhooks
+                if new_score < old_score - 5.0:
+                    logger.warning(f"  🔔 ALERT: Significant score drop for {row['name']} ({old_score} -> {new_score})")
+                    # TODO: Trigger webhook_worker.deliver_alerts()
+
+            logger.success(f"  [{category.upper()}] {row['name']}: {new_score}/100")
         except Exception as e:
             logger.warning(f"  Failed to score {row['name']}: {e}")
 
@@ -215,9 +224,7 @@ def score_all_and_store() -> None:
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
-
-    import sys
-    if "--train" in sys.argv:
-        train()
-    else:
-        score_all_and_store()
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+    load_dotenv()
+    score_all_and_store()

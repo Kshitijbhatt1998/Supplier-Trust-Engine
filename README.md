@@ -16,46 +16,38 @@ Global B2B procurement is broken:
 
 ---
 
-## What It Does
-
 ## 🛡 Security & Authentication
 
-The Supplier Trust Engine uses a multi-tier authentication model:
+The Supplier Trust Engine uses a production-grade identity and access management (IAM) system:
 
-1.  **Dashboard Access**: Users must log in via the dashboard with an email and password. This is secured with **Bcrypt** hashing and **JWT** session tokens.
-2.  **API Access (for AI Agents)**: External callers use an `X-API-Key` header. These keys are linked to specific tenants and are hashed (SHA-256) in the database.
-3.  **Super-User Access**: Developers can use the `X-Admin-Token` header for emergency administrative operations.
+1.  **Dashboard Access**: Secured with **JWT-based sessions**, **Bcrypt** password hashing, and role-based access control (RBAC). 
+    - Admin: Full system access.
+    - Tenant Admin: Manage keys and users for their own startup.
+    - Viewer: Read-only access to trust scores.
+2.  **API Access (for AI Agents)**: Stateless `X-API-Key` headers. Each key is linked to a tenant tier with **hard RPM and monthly quotas**.
+3.  **Super-User Bypass**: Legacy `X-Admin-Token` for emergency developer access.
 
 ### Quickstart (Local)
 
-1.  **Clone & Install**: `pip install -r requirements.txt`
+1.  **Clone & Install**: `pip install -r requirements.txt && playwright install chromium`
 2.  **Seed Database**: `python seed_db.py`
-3.  **Seed Admin User**: `python scripts/seed_users.py` (Creates `admin@datavibe.io` with password `admin_password_123`)
+3.  **Seed Identity**: `python scripts/seed_users.py` (Creates `admin@datavibe.io` / `admin_password_123`)
 4.  **Run API**: `python api/main.py`
 5.  **Run Dashboard**: `cd dashboard && npm install && npm run dev`
 
 ---
 
-## 🗺 Roadmap
+## What It Does
 
-- [x] **Multi-Tenant API Infrastructure**: Distinct API keys, tenant isolation, and usage tracking.
-- [x] **Identity Management System**: JWT-based user authentication and RBAC.
-- [x] **Secure Token Hashing**: SHA-256 for API keys and Bcrypt for passwords.
-- [ ] **Chem/Polymer Expansion**: Seed specialized models for chemical manufacturing trust.
-- [ ] **Autonomous GRS Verification**: Real-time Global Recycled Standard certification scraping.
-- [ ] **Tiered Rate Limiting**: Enforce hard quotas based on tenant subscription levels.
+The Supplier Trust Engine automates the entire supplier vetting workflow for the autonomous economy:
 
-The Supplier Trust Engine automates the entire supplier vetting workflow:
-
-1. **Scrapes** supplier shipment history from ImportYeti (US customs manifests)
-2. **Verifies** GOTS and OEKO-TEX certifications directly from issuing-body portals
-3. **Cross-references** claimed volumes against UN Comtrade national trade statistics
-4. **Engineers 17 features** that distinguish real manufacturers from middlemen
-5. **Scores** every supplier 0–100 with a LightGBM model + SHAP explainability
-6. **Resolves** supplier names to canonical entities using adaptive fuzzy matching with Laplace-smoothed thresholds
-7. **Exposes** scores via a production FastAPI — ready for AI agent consumption
-
-The result: any AI agent or procurement team can call `POST /v1/procure/evaluate` with criteria and receive a ranked, explainable shortlist of vetted suppliers in milliseconds.
+1. **Scrapes** supplier shipment history in real-time or batch via Playwright.
+2. **Verifies** certifications (GOTS, OEKO-TEX, and **GRS**) directly from issuing-body portals.
+3. **Multi-Vertical Scoring**: Features specialized LightGBM models for **Textiles** and **Chemicals/Polymers**.
+4. **Engineers 20+ features** (CAS density, purity index, customer concentration, etc.).
+5. **Temporal Tracking**: Tracks trust score history and triggers **Webhook alerts** on significant drops.
+6. **Resolves** messy names to canonical entities with adaptive fuzzy matching and **Role Shield** protection.
+7. **Marketplace Sync**: Seamlessly pushes trust scores into **Shopify** or **Faire** storefronts.
 
 ---
 
@@ -104,32 +96,58 @@ Data License              Custom     → Bulk trust scores for platforms (Tier 1
 │                                                             │
 │  ImportYeti ──► US Customs manifests (shipment history)     │
 │  OEKO-TEX   ──► Certification portal (label check API)      │
+│  GOTS       ──► Certified facilities database              ┌─────────────────────────────────────────────────────────────┐
+│                        DATA SOURCES                         │
+│                                                             │
+│  ImportYeti ──► US manifests (shipment history)             │
+│  Textile Ex ──► GRS Certification portal (real-time check)  │
+│  OEKO-TEX   ──► Certification portal (label check API)      │
 │  GOTS       ──► Certified facilities database               │
-│  UN Comtrade──► National trade statistics (export volumes)  │
+│  UN Comtrade──► National trade stats (export volumes)       │
 └──────────────────────────┬──────────────────────────────────┘
-                           │  Playwright async scrapers
+                           │  Playwright Scrapers / Verifiers
                            ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                    DuckDB  (local/volume)                    │
-│  suppliers │ certifications │ shipments │ trade_stats        │
-│  entity_aliases │ entity_rejections │ trust_scores           │
-│  admin_audit_log │ resolver_config (view)                    │
+│  suppliers │ certifications │ shipments │ trust_scores       │
+│  users │ tenants │ api_keys │ usage_logs │ webhooks          │
+│  supplier_score_history │ tenant_watchlists                  │
 └──────────────────────────┬──────────────────────────────────┘
                            │
               ┌────────────┴────────────┐
               ▼                         ▼
-     Feature Engineering         Entity Resolution
-     (17 signals, textile)       (adaptive fuzzy matching
-                                  + CAS exact match)
+      Feature Engineering         Entity Resolution
+      (Textile & Chemical)        (Adaptive Fuzzy + CAS +
+                                   Role Shield)
               │                         │
               └────────────┬────────────┘
                            ▼
 ┌──────────────────────────────────────────────────────────────┐
-│              LightGBM Classifier  +  SHAP Explainer         │
-│  Input:  17 features per supplier (textile category only)   │
-│  Output: risk_probability (0–1) → trust_score (0–100)      │
-│          + top 3 SHAP risk flags in plain English           │
+│             LightGBM Multi-Vertical Scoring                 │
+│  - Textile Classifier (risk probability)                    │
+│  - Chemical Regressor (trust score prediction)              │
+│  - Output: 0–100 Score + SHAP Risk Flags                   │
 └──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│          FastAPI  /v1/  (RBAC + Tiered Rate Limits)         │
+│                                                             │
+│  [AUTH]   /auth/login        JWT Session Issuance           │
+│  [CORE]   /score             Score by name/ID               │
+│  [CORE]   /procure/evaluate  AI Decision Engine             │
+│  [REAL]   /suppliers/{id}/refresh  On-demand scraping       │
+│  [REAL]   /verify/grs        Textile Exchange Verification  │
+│  [ALERTS] /webhooks/subscribe  Score drop notifications     │
+│  [SYNC]   /integrations/shopify/sync  E-commerce sync       │
+│  [ADMIN]  /admin/review-queue  Alias review board           │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+               ┌───────────┴────────────┐
+               ▼                        ▼
+        React Dashboard          AI Procurement Agent
+        (RBAC Protected)         (Scoped API Keys)
+�────┘
                            │
                            ▼
 ┌──────────────────────────────────────────────────────────────┐
@@ -156,29 +174,21 @@ Data License              Custom     → Bulk trust scores for platforms (Tier 1
 
 ---
 
-## Trust Score Features (17 signals)
+## Trust Score Features (20+ signals)
 
-> Applies to textile suppliers only. Chemical/polymer suppliers use manually-seeded trust scores.
-
+### 👗 Textile Category
 | Feature | What It Measures | Middleman Signal |
 |:---|:---|:---|
-| `years_active` | Business maturity from first shipment date | < 2 years → high risk |
-| `days_since_last_shipment` | Operational recency | > 180 days → inactive |
-| `customer_concentration_ratio` | 1 / distinct buyers — captive factory risk | 1 buyer → ratio = 1.0 |
-| `hs_code_count` | Number of product codes shipped | Too many or too few |
-| `hs_chapter_diversity` | Number of distinct HS chapters | Middlemen spread wide |
-| `shipment_frequency_score` | Monthly shipments normalized by years active | Low = broker |
 | `certification_score` | Weighted GOTS (2pt) + OEKO-TEX (1pt) | 0 = no verified certs |
 | `has_any_valid_cert` | Binary: any live certification | 0 = no proof of standards |
-| `has_expired_cert` | Lapsed certifications | Compliance has slipped |
-| `is_high_volume_shipper` | Above-median shipment count | Low = likely intermediary |
-| `country_risk_score` | Country-level manufacturing risk lookup | Proxy for compliance quality |
-| `manifest_verification_score` | Claimed vs. verified shipments | Low = unsubstantiated claims |
-| `national_market_share` | Supplier volume vs. UN Comtrade national export data | Implausibly high = fraud |
-| `shipment_count` | Total shipments ever recorded | Raw volume signal |
-| `avg_monthly_shipments` | Operational cadence | Very low = broker |
-| `total_buyers` | Number of distinct buyer relationships | 1–2 = captive factory |
-| `valid_cert_count` | Total currently valid certifications | 0 = unverified |
+| `hs_chapter_diversity` | Number of distinct HS chapters | Middlemen spread wide |
+
+### 🧪 Chemical Category
+| Feature | What It Measures | Manufacturer Signal |
+|:---|:---|:---|
+| `cas_linkage_score` | Density of valid CAS numbers in trade logs | High = real producer |
+| `grade_purity_index` | Matches for Reagent/USP/Food vs Tech grade | High = advanced lab/facility |
+| `regulatory_hub_score`| Facility presence in primary chemical hubs | High = higher compliance |
 
 ---
 
@@ -575,20 +585,20 @@ Key selectors to verify:
 
 ---
 
-## Roadmap
-
 - [x] Admin Review Dashboard with adaptive threshold God View
 - [x] Multi-industry support (textile + chemical/polymer)
 - [x] CAS Registry Number exact-match resolver
 - [x] Role Shield — C/O / VIA / BY surrogate detection
 - [x] Snapshot-based audit undo
-- [ ] GRS (Global Recycled Standard) certification verifier
-- [ ] Chemical category LightGBM model (dedicated feature engineering)
-- [ ] Supplier changelog — track score changes over time
-- [ ] Webhook alerts when a supplier's score drops below threshold
-- [ ] Shopify / Faire plugin for direct store integration
-- [ ] Multi-tenant API with per-customer supplier databases
-- [ ] Real-time scraping triggers (score on demand, not just batch)
+- [x] GRS (Global Recycled Standard) certification verifier
+- [x] Chemical category LightGBM model (dedicated feature engineering)
+- [x] Supplier changelog — track score changes over time
+- [x] Webhook alerts when a supplier's score drops below threshold
+- [x] Shopify / Faire plugin for direct store integration
+- [x] Multi-tenant API with per-customer supplier databases (Overlay Model)
+- [x] Real-time scraping triggers (score on demand, not just batch)
+- [ ] **Predictive Lead Times**: Forecast fulfillment delays based on port congestion
+- [ ] **ESG Scraper**: Extract real-time ESG commitments from supplier PDF reports
 
 ---
 

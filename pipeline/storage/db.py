@@ -181,6 +181,49 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
         );
     """)
 
+    # --- Trust Visibility & History ---
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS supplier_score_history (
+            id VARCHAR PRIMARY KEY,
+            supplier_id VARCHAR,
+            old_score FLOAT,
+            new_score FLOAT,
+            risk_label INTEGER,
+            reason_code VARCHAR,
+            changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_history_supplier ON supplier_score_history(supplier_id);
+    """)
+
+    # --- Multi-Tenancy Private Overlays ---
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS tenant_watchlists (
+            tenant_id VARCHAR,
+            supplier_id VARCHAR,
+            private_note TEXT,
+            is_monitored BOOLEAN DEFAULT TRUE,
+            last_review_at TIMESTAMP,
+            PRIMARY KEY (tenant_id, supplier_id),
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+        );
+    """)
+
+    # --- Automation & Alerts ---
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS webhooks (
+            id VARCHAR PRIMARY KEY,
+            tenant_id VARCHAR,
+            url VARCHAR,
+            secret VARCHAR,
+            event_types JSON, -- ['score_drop', 'new_risk_flag']
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+        );
+    """)
+
     # ---------------------------------------------------------------- #
     # Schema migrations — safe to run on existing databases            #
     # ---------------------------------------------------------------- #
