@@ -12,6 +12,7 @@ Auth model:
 
 import os
 import json
+import uuid
 from typing import Optional
 from contextlib import asynccontextmanager
 
@@ -31,7 +32,7 @@ from pipeline.storage.db import init_db
 from model.features import engineer_features, MODEL_FEATURES
 from model.scorer import score_supplier
 from api.decision_engine import DecisionEngine, ProcurementCriteria
-from api.auth import get_api_key
+from api.auth import get_api_key, get_admin_key
 from api.resolver import EntityResolver
 
 
@@ -90,8 +91,9 @@ ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-API-Key"],
+    allow_methods=["GET", "POST", "OPTIONS"],  # OPTIONS required for preflight
+    allow_headers=["Content-Type", "X-API-Key", "X-Admin-Token"],
+    allow_credentials=False,  # tokens are in headers, not cookies
 )
 
 
@@ -119,6 +121,14 @@ class ScoreRequest(BaseModel):
 class FeedbackRequest(BaseModel):
     supplier_name: str = Field(..., max_length=200)
     canonical_id:  str = Field(..., max_length=100)
+    is_confirmed:  bool = True
+    reason_code:   Optional[str] = None
+
+
+class AdminActionRequest(BaseModel):
+    alias_ids:   list[str]
+    action:      str # 'verify' or 'reject'
+    reason_code: Optional[str] = None
 
 
 class TrustScoreResponse(BaseModel):
@@ -393,28 +403,168 @@ def procure_evaluate(req: ProcureRequest, request: Request, key: str = Depends(g
 @limiter.limit("20/minute")
 def resolver_feedback(req: FeedbackRequest, request: Request, key: str = Depends(get_api_key)):
     """
-    User feedback for fuzzy matches. Increments suggestion_count and
-    auto-promotes to is_verified=True if threshold reached.
+    User feedback loop. 
+    If confirmed=True: Increment suggestion_count and potentially promote alias.
+    If confirmed=False: Add to rejections list to prevent future suggestions.
     """
     resolver = EntityResolver(con)
     normalized = resolver.normalize(req.supplier_name)
     
-    # Update suggestion count
-    con.execute("""
-        UPDATE entity_aliases 
-        SET suggestion_count = suggestion_count + 1,
-            resolved_at = NOW()
-        WHERE alias_normalized = ? AND canonical_id = ?
-    """, [normalized, req.canonical_id])
-    
-    # Auto-promotion logic (e.g. 3 confirmations)
-    con.execute("""
-        UPDATE entity_aliases
-        SET is_verified = TRUE
-        WHERE alias_normalized = ? AND canonical_id = ? AND suggestion_count >= 3
-    """, [normalized, req.canonical_id])
+    if req.is_confirmed:
+        # Positive feedback
+        con.execute("""
+            UPDATE entity_aliases 
+            SET suggestion_count = suggestion_count + 1,
+                resolved_at = NOW()
+            WHERE alias_normalized = ? AND canonical_id = ?
+        """, [normalized, req.canonical_id])
+        
+        # Auto-promotion logic (e.g. 3 confirmations)
+        con.execute("""
+            UPDATE entity_aliases
+            SET is_verified = TRUE
+            WHERE alias_normalized = ? AND canonical_id = ? AND suggestion_count >= 3
+        """, [normalized, req.canonical_id])
+    else:
+        # Negative feedback: Add to rejections (using ON CONFLICT to ensure idempotency)
+        con.execute("""
+            INSERT INTO entity_rejections (alias_normalized, canonical_id, reason_code)
+            VALUES (?, ?, ?)
+            ON CONFLICT (alias_normalized, canonical_id) DO NOTHING
+        """, [normalized, req.canonical_id, req.reason_code or 'user_rejected'])
     
     return {"status": "success", "message": "Feedback recorded"}
+
+
+# ------------------------------------------------------------------ #
+# Admin Dashboard Endpoints                                          #
+# ------------------------------------------------------------------ #
+
+@v1.get("/admin/review-queue")
+@limiter.limit("10/minute")
+def admin_review_queue(
+    request:  Request,
+    key:      str            = Depends(get_admin_key),
+    category: Optional[str]  = Query(None, max_length=50),
+):
+    """
+    Returns a prioritized queue of unverified aliases for human audit.
+    Priority P = (0.4 * cap(V, 100)/100) + (0.3 * T/100) + (0.3 * S/100)
+    """
+    # Constants must match EntityResolver class attributes
+    BASE_THRESHOLD   = 85.0
+    PENALTY_WEIGHT   = 12.0
+    MAX_THRESHOLD    = 97.0
+
+    query = """
+        SELECT
+            a.id,
+            a.alias_name,
+            a.alias_normalized,
+            a.canonical_id,
+            a.match_score,
+            a.suggestion_count,
+            s.name                                                  AS canonical_name,
+            t.trust_score,
+            t.shap_flags_json,
+            -- Priority Score P (capped-volume normalisation)
+            (0.4 * LEAST(a.suggestion_count, 100) / 100.0) +
+            (0.3 * COALESCE(t.trust_score, 0)     / 100.0) +
+            (0.3 * a.match_score                  / 100.0)         AS priority_score,
+            -- Adaptive threshold components from resolver_config view
+            COALESCE(rc.rejection_count,    0)                      AS rejection_count,
+            COALESCE(rc.verification_count, 0)                      AS verification_count,
+            COALESCE(rc.laplace_rejection_rate, 0.5)                AS laplace_rejection_rate
+        FROM entity_aliases a
+        JOIN  suppliers     s  ON s.id              = a.canonical_id
+        LEFT JOIN trust_scores  t  ON t.supplier_id = a.canonical_id
+        LEFT JOIN resolver_config rc ON rc.canonical_id = a.canonical_id
+        WHERE a.is_verified = FALSE
+    """
+    params: list = []
+    if category:
+        query += " AND a.category = ?"
+        params.append(category)
+    query += " ORDER BY priority_score DESC LIMIT 100"
+    rows = con.execute(query, params).fetchall()
+
+    def _threshold(rate: float) -> float:
+        return min(BASE_THRESHOLD + rate * PENALTY_WEIGHT, MAX_THRESHOLD)
+
+    def _cas_from_id(canonical_id: str) -> Optional[str]:
+        """Extract bare CAS number from a cas-NNNNNN-NN-N canonical ID, else None."""
+        if canonical_id.startswith("cas-"):
+            return canonical_id[4:]  # strip "cas-" prefix
+        return None
+
+    return [
+        {
+            "id":                 r[0],
+            "alias_name":         r[1],
+            "alias_normalized":   r[2],
+            "canonical_id":       r[3],
+            "match_score":        r[4],
+            "suggestion_count":   r[5],
+            "canonical_name":     r[6],
+            "trust_score":        r[7],
+            "shap_flags":         json.loads(r[8]) if r[8] else [],
+            "priority_score":     round(r[9], 4),
+            "rejection_count":    r[10],
+            "verification_count": r[11],
+            "adaptive_threshold": round(_threshold(float(r[12])), 1),
+            "cas_number":         _cas_from_id(r[3]),  # None for non-chemical entities
+        }
+        for r in rows
+    ]
+
+@v1.post("/admin/alias/action")
+@limiter.limit("10/minute")
+def admin_alias_action(req: AdminActionRequest, request: Request, key: str = Depends(get_admin_key)):
+    """
+    Bulk verify or reject aliases.
+    """
+    if not req.alias_ids:
+        return {"status": "ignored", "message": "No IDs provided"}
+
+    if req.action not in ('verify', 'reject'):
+        raise HTTPException(400, f"Invalid action '{req.action}': must be 'verify' or 'reject'")
+
+    # Resolve canonical_id of the first alias for grouping in the audit log
+    first_row = con.execute(
+        "SELECT canonical_id FROM entity_aliases WHERE id = ?", [req.alias_ids[0]]
+    ).fetchone()
+
+    con.execute("""
+        INSERT INTO admin_audit_log (id, action, alias_ids, canonical_id, reason_code)
+        VALUES (?, ?, ?, ?, ?)
+    """, [
+        uuid.uuid4().hex,
+        req.action,
+        json.dumps(req.alias_ids),
+        first_row[0] if first_row else None,
+        req.reason_code,
+    ])
+
+    if req.action == 'verify':
+        # Single click promotion
+        for aid in req.alias_ids:
+            con.execute("UPDATE entity_aliases SET is_verified = TRUE WHERE id = ?", [aid])
+            
+    elif req.action == 'reject':
+        # Move to negative cache and delete from aliases
+        for aid in req.alias_ids:
+            # Get data first
+            row = con.execute("SELECT alias_normalized, canonical_id FROM entity_aliases WHERE id = ?", [aid]).fetchone()
+            if row:
+                con.execute("""
+                    INSERT INTO entity_rejections (alias_normalized, canonical_id, reason_code)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT DO NOTHING
+                """, [row[0], row[1], req.reason_code or 'admin_rejected'])
+                
+                con.execute("DELETE FROM entity_aliases WHERE id = ?", [aid])
+                
+    return {"status": "success", "count": len(req.alias_ids)}
 
 
 app.include_router(v1)

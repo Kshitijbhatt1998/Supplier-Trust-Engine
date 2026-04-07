@@ -16,9 +16,10 @@ def get_db_path() -> str:
 def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
     """Initialize DuckDB with all required tables."""
     db_path = path or get_db_path()
-    db_dir = os.path.dirname(db_path)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
+    if db_path != ":memory:":
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
 
     con = duckdb.connect(db_path)
 
@@ -37,6 +38,7 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
             last_shipment_date  DATE,
             source              VARCHAR,                  -- 'importyeti' | 'indiamart' | ...
             raw_url             VARCHAR,
+            category            VARCHAR DEFAULT 'textile', -- 'textile' | 'chemical' | ...
             scraped_at          TIMESTAMP DEFAULT NOW()
         );
     """)
@@ -105,9 +107,38 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
             match_score         FLOAT,                    -- 0–100; 100=exact/alias, 0=new entity
             suggestion_count    INTEGER DEFAULT 0,        -- crowdsourced hits for auto-promotion
             is_verified         BOOLEAN DEFAULT FALSE,    -- manual/trusted match flag
+            category            VARCHAR DEFAULT 'textile', -- mirrors suppliers.category
             resolved_at         TIMESTAMP DEFAULT NOW()
         );
     """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS entity_rejections (
+            alias_normalized    VARCHAR NOT NULL,
+            canonical_id        VARCHAR NOT NULL,
+            reason_code         VARCHAR,              -- Optional: 'wrong_subsidiary', 'not_supplier'
+            rejected_at         TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (alias_normalized, canonical_id)
+        );
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS admin_audit_log (
+            id           VARCHAR PRIMARY KEY,   -- uuid4 hex
+            action       VARCHAR NOT NULL,       -- 'verify' | 'reject'
+            alias_ids    VARCHAR NOT NULL,       -- JSON array of acted-on IDs
+            canonical_id VARCHAR,               -- canonical_id of first alias (for grouping)
+            reason_code  VARCHAR,
+            acted_at     TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    # ---------------------------------------------------------------- #
+    # Schema migrations — safe to run on existing databases            #
+    # ---------------------------------------------------------------- #
+    # ALTER TABLE ADD COLUMN IF NOT EXISTS is idempotent in DuckDB 0.8+
+    con.execute("ALTER TABLE suppliers      ADD COLUMN IF NOT EXISTS category VARCHAR DEFAULT 'textile'")
+    con.execute("ALTER TABLE entity_aliases ADD COLUMN IF NOT EXISTS category VARCHAR DEFAULT 'textile'")
 
     # Indexes on hot query paths
     con.execute("CREATE INDEX IF NOT EXISTS idx_trust_score      ON trust_scores(trust_score)")
@@ -116,6 +147,41 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
     con.execute("CREATE INDEX IF NOT EXISTS idx_cert_supplier    ON certifications(supplier_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_cert_status      ON certifications(status)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_alias_norm       ON entity_aliases(alias_normalized)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_alias_canonical  ON entity_aliases(canonical_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_alias_category   ON entity_aliases(category)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_supplier_category ON suppliers(category)")
+
+    # ---------------------------------------------------------------- #
+    # resolver_config — Laplace-smoothed rejection rate per canonical.  #
+    # Used by EntityResolver to compute per-supplier adaptive threshold. #
+    #                                                                    #
+    # Formula: (rejections + 1) / (rejections + verifications + 2)      #
+    #   - New supplier (0/0): 1/2 = 0.5  → neutral, no penalty          #
+    #   - 10 rejections, 0 verified: 11/12 ≈ 0.92 → near-max penalty   #
+    #   - 10 rejections, 10 verified: 11/22 = 0.5 → penalty reset       #
+    # ---------------------------------------------------------------- #
+    con.execute("""
+        CREATE OR REPLACE VIEW resolver_config AS
+        SELECT
+            s.id                                          AS canonical_id,
+            COALESCE(r.rejection_count,    0)             AS rejection_count,
+            COALESCE(v.verification_count, 0)             AS verification_count,
+            (COALESCE(r.rejection_count, 0) + 1.0) /
+            (COALESCE(r.rejection_count, 0) +
+             COALESCE(v.verification_count, 0) + 2.0)    AS laplace_rejection_rate
+        FROM suppliers s
+        LEFT JOIN (
+            SELECT canonical_id, COUNT(*) AS rejection_count
+            FROM   entity_rejections
+            GROUP  BY canonical_id
+        ) r ON r.canonical_id = s.id
+        LEFT JOIN (
+            SELECT canonical_id, COUNT(*) AS verification_count
+            FROM   entity_aliases
+            WHERE  is_verified = TRUE
+            GROUP  BY canonical_id
+        ) v ON v.canonical_id = s.id
+    """)
 
     logger.info(f"Database initialized at {db_path}")
     return con
@@ -135,8 +201,8 @@ def upsert_supplier(con: duckdb.DuckDBPyConnection, supplier: dict) -> None:
                 id, name, country, address, shipment_count,
                 avg_monthly_shipments, total_buyers, hs_codes,
                 top_buyers, first_shipment_date, last_shipment_date,
-                source, raw_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source, raw_url, category
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
             supplier.get("id"),
             supplier.get("name"),
@@ -151,6 +217,7 @@ def upsert_supplier(con: duckdb.DuckDBPyConnection, supplier: dict) -> None:
             supplier.get("last_shipment_date"),
             supplier.get("source"),
             supplier.get("raw_url"),
+            supplier.get("category", "textile"),
         ])
     except duckdb.ConstraintException:
         con.execute("""
