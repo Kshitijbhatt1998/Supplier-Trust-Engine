@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\scripts\seed_users.py", line 52, in <module>
+    seed_admin_user()
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\scripts\seed_users.py", line 12, in seed_admin_user
+    con = init_db()
+  File "D:\Project ideas\Supplier_trust_Engine\Supplier-Trust-Engine\pipeline\storage\db.py", line 24, in init_db
+    con = duckdb.connect(db_path)
+duckdb.duckdb.IOException: IO Error: File is already open in 
+C:\Users\Kshit\AppData\Local\Programs\Python\Python310\python.exe (PID 40824)

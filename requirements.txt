@@ -20,3 +20,6 @@ pydantic==2.12.5
 rapidfuzz==3.14.3
 aiofiles==23.2.1
 pytest==8.3.5
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.12

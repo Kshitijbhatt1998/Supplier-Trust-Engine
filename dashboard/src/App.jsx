@@ -6,17 +6,35 @@ import ProcurementSimulator from './components/ProcurementSimulator';
 import SupplierModal from './components/SupplierModal';
 import AdminDashboard from './components/AdminDashboard';
 
+import Login from './components/Login';
+
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
   const [activeTab, setActiveTab] = useState('dashboard');
   const [suppliers, setSuppliers] = useState([]);
   const [stats, setStats] = useState({ totalSuppliers: 0, avgScore: 0, verifiedCerts: 0, riskAlerts: 0 });
   const [loading, setLoading] = useState(true);
   const [selectedSupplier, setSelectedSupplier] = useState(null);
   const [filters, setFilters] = useState({ min_score: 0, country: '' });
+  const [user, setUser] = useState(null);
 
   useEffect(() => {
-    loadData();
-  }, [filters]);
+    if (isAuthenticated) {
+      loadData();
+      loadUser();
+    }
+  }, [filters, isAuthenticated]);
+
+  const loadUser = async () => {
+    try {
+      const u = await api.me();
+      setUser(u);
+    } catch (err) {
+      console.error("Auth failed:", err);
+      setIsAuthenticated(false);
+      localStorage.removeItem('token');
+    }
+  };
 
   const loadData = async () => {
     setLoading(true);
@@ -38,6 +56,10 @@ export default function App() {
       setLoading(false);
     }
   };
+
+  if (!isAuthenticated) {
+    return <Login onLoginSuccess={() => setIsAuthenticated(true)} />;
+  }
 
   return (
     <div className="layout">
@@ -62,6 +84,18 @@ export default function App() {
           </button>
         </nav>
         <div className="sidebar-footer">
+          {user && (
+            <div className="user-profile" style={{ marginBottom: '12px', padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
+              <p style={{ fontSize: '0.85rem', fontWeight: '600', color: '#fff' }}>{user.full_name || 'Admin User'}</p>
+              <p style={{ fontSize: '0.75rem', opacity: 0.6 }}>{user.email}</p>
+              <button 
+                onClick={() => { localStorage.removeItem('token'); setIsAuthenticated(false); }}
+                style={{ background: 'none', border: 'none', color: '#ff4d4d', fontSize: '0.75rem', cursor: 'pointer', padding: '4px 0', marginTop: '4px' }}
+              >
+                Logout
+              </button>
+            </div>
+          )}
           <div className="api-status">
             <span className="status-dot online"></span>
             <span>API CORE ONLINE</span>

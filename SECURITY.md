@@ -1,5 +1,27 @@
 # Security Policy
 
+## Data Isolation & Multi-Tenancy
+The Supplier Trust Engine uses a **Shared Data with Isolated Logs** model:
+- **Tenants**: Managed in the `tenants` table.
+- **Isolation**: Multi-tenant quotas and usage logging are enforced at the API layer.
+- **Identity**: Dashboard access requires a unique user account linked to a tenant.
+
+## Identity & Access Management (IAM)
+- **User Authentication**: Secured with **Bcrypt** (12 rounds) for local password storage.
+- **Session Management**: **JWT (HS256)** tokens with a 24-hour expiration window.
+- **API Keys**: Stored as **SHA-256** hashes; raw keys are never stored in the database.
+- **Super-User Bypass**: Use the legacy `X-Admin-Token` environment variable only for emergency developer access.
+
+## Secrets Management
+- All sensitive keys (DB passwords, API keys, JWT Secrets) must be stored in `.env` or passed via CI/CD environments.
+- **Never** hardcode keys in the frontend source code.
+
+## Infrastructure Hardening
+- **GitHub Actions**: Workflows are configured with the `permissions: read-all` block to prevent unauthorized write-access from compromised dependencies.
+- **CORS**: Strict origin checking is enforced in `api/main.py`.
+
+## Reporting a Vulnerability
+
 The Supplier Trust Engine team takes the security of our procurement intelligence infrastructure seriously. We appreciate the community's efforts in identifying and reporting vulnerabilities.
 
 ## Supported Versions
