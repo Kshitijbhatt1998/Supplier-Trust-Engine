@@ -1,6 +1,6 @@
 import os
 import uuid
-import hashlib
+from api.auth import hash_key
 from pipeline.storage.db import init_db
 from loguru import logger
 from dotenv import load_dotenv
@@ -33,7 +33,7 @@ def seed_tenants():
         raw_key = secrets.token_hex(32)
         print(f"\nNEW API_KEY GENERATED: {raw_key}\nPLEASE UPDATE YOUR .env FILE!\n")
 
-    hashed_key = hashlib.sha256(raw_key.encode()).hexdigest()
+    hashed_key = hash_key(raw_key)
     prefix = raw_key[:8]
 
     con.execute("""
