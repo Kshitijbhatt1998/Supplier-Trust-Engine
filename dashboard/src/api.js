@@ -41,9 +41,10 @@ export const api = {
   feedback:  (body)         => request('/resolver/feedback', { method: 'POST', body: JSON.stringify(body) }),
   
   // Admin Endpoints
-  adminQueue:  ()             => {
+  adminQueue:  (category)     => {
     const adminToken = import.meta.env.VITE_ADMIN_TOKEN
-    return request('/admin/review-queue', { headers: { 'X-Admin-Token': adminToken } })
+    const qs = category ? `?category=${encodeURIComponent(category)}` : ''
+    return request(`/admin/review-queue${qs}`, { headers: { 'X-Admin-Token': adminToken } })
   },
   adminAction: (body)         => {
     const adminToken = import.meta.env.VITE_ADMIN_TOKEN

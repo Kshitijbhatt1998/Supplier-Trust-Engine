@@ -12,6 +12,7 @@ Auth model:
 
 import os
 import json
+import uuid
 from typing import Optional
 from contextlib import asynccontextmanager
 
@@ -90,8 +91,9 @@ ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-API-Key"],
+    allow_methods=["GET", "POST", "OPTIONS"],  # OPTIONS required for preflight
+    allow_headers=["Content-Type", "X-API-Key", "X-Admin-Token"],
+    allow_credentials=False,  # tokens are in headers, not cookies
 )
 
 
@@ -440,47 +442,77 @@ def resolver_feedback(req: FeedbackRequest, request: Request, key: str = Depends
 
 @v1.get("/admin/review-queue")
 @limiter.limit("10/minute")
-def admin_review_queue(request: Request, key: str = Depends(get_admin_key)):
+def admin_review_queue(
+    request:  Request,
+    key:      str            = Depends(get_admin_key),
+    category: Optional[str]  = Query(None, max_length=50),
+):
     """
     Returns a prioritized queue of unverified aliases for human audit.
     Priority P = (0.4 * cap(V, 100)/100) + (0.3 * T/100) + (0.3 * S/100)
     """
+    # Constants must match EntityResolver class attributes
+    BASE_THRESHOLD   = 85.0
+    PENALTY_WEIGHT   = 12.0
+    MAX_THRESHOLD    = 97.0
+
     query = """
-        SELECT 
+        SELECT
             a.id,
             a.alias_name,
             a.alias_normalized,
             a.canonical_id,
             a.match_score,
             a.suggestion_count,
-            s.name as canonical_name,
+            s.name                                                  AS canonical_name,
             t.trust_score,
             t.shap_flags_json,
-            -- Calculate Priority Score P
-            (0.4 * LEAST(a.suggestion_count, 100) / 100.0) + 
-            (0.3 * COALESCE(t.trust_score, 0) / 100.0) + 
-            (0.3 * a.match_score / 100.0) as priority_score
+            -- Priority Score P (capped-volume normalisation)
+            (0.4 * LEAST(a.suggestion_count, 100) / 100.0) +
+            (0.3 * COALESCE(t.trust_score, 0)     / 100.0) +
+            (0.3 * a.match_score                  / 100.0)         AS priority_score,
+            -- Adaptive threshold components from resolver_config view
+            COALESCE(rc.rejection_count,    0)                      AS rejection_count,
+            COALESCE(rc.verification_count, 0)                      AS verification_count,
+            COALESCE(rc.laplace_rejection_rate, 0.5)                AS laplace_rejection_rate
         FROM entity_aliases a
-        JOIN suppliers s ON a.canonical_id = s.id
-        LEFT JOIN trust_scores t ON a.canonical_id = t.supplier_id
+        JOIN  suppliers     s  ON s.id              = a.canonical_id
+        LEFT JOIN trust_scores  t  ON t.supplier_id = a.canonical_id
+        LEFT JOIN resolver_config rc ON rc.canonical_id = a.canonical_id
         WHERE a.is_verified = FALSE
-        ORDER BY priority_score DESC
-        LIMIT 100
     """
-    rows = con.execute(query).fetchall()
-    
+    params: list = []
+    if category:
+        query += " AND a.category = ?"
+        params.append(category)
+    query += " ORDER BY priority_score DESC LIMIT 100"
+    rows = con.execute(query, params).fetchall()
+
+    def _threshold(rate: float) -> float:
+        return min(BASE_THRESHOLD + rate * PENALTY_WEIGHT, MAX_THRESHOLD)
+
+    def _cas_from_id(canonical_id: str) -> Optional[str]:
+        """Extract bare CAS number from a cas-NNNNNN-NN-N canonical ID, else None."""
+        if canonical_id.startswith("cas-"):
+            return canonical_id[4:]  # strip "cas-" prefix
+        return None
+
     return [
         {
-            "id": r[0],
-            "alias_name": r[1],
-            "alias_normalized": r[2],
-            "canonical_id": r[3],
-            "match_score": r[4],
-            "suggestion_count": r[5],
-            "canonical_name": r[6],
-            "trust_score": r[7],
-            "shap_flags": json.loads(r[8]) if r[8] else [],
-            "priority_score": round(r[9], 4)
+            "id":                 r[0],
+            "alias_name":         r[1],
+            "alias_normalized":   r[2],
+            "canonical_id":       r[3],
+            "match_score":        r[4],
+            "suggestion_count":   r[5],
+            "canonical_name":     r[6],
+            "trust_score":        r[7],
+            "shap_flags":         json.loads(r[8]) if r[8] else [],
+            "priority_score":     round(r[9], 4),
+            "rejection_count":    r[10],
+            "verification_count": r[11],
+            "adaptive_threshold": round(_threshold(float(r[12])), 1),
+            "cas_number":         _cas_from_id(r[3]),  # None for non-chemical entities
         }
         for r in rows
     ]
@@ -493,6 +525,25 @@ def admin_alias_action(req: AdminActionRequest, request: Request, key: str = Dep
     """
     if not req.alias_ids:
         return {"status": "ignored", "message": "No IDs provided"}
+
+    if req.action not in ('verify', 'reject'):
+        raise HTTPException(400, f"Invalid action '{req.action}': must be 'verify' or 'reject'")
+
+    # Resolve canonical_id of the first alias for grouping in the audit log
+    first_row = con.execute(
+        "SELECT canonical_id FROM entity_aliases WHERE id = ?", [req.alias_ids[0]]
+    ).fetchone()
+
+    con.execute("""
+        INSERT INTO admin_audit_log (id, action, alias_ids, canonical_id, reason_code)
+        VALUES (?, ?, ?, ?, ?)
+    """, [
+        uuid.uuid4().hex,
+        req.action,
+        json.dumps(req.alias_ids),
+        first_row[0] if first_row else None,
+        req.reason_code,
+    ])
 
     if req.action == 'verify':
         # Single click promotion
