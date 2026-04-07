@@ -11,8 +11,14 @@ permissions:
 
 jobs:
   test:
-    name: Python smoke tests
+    name: Python tests
     runs-on: ubuntu-latest
+
+    env:
+      # Required by api/auth.py at import time (startup guard).
+      # Tests use in-memory DuckDB — no real credentials needed.
+      ADMIN_TOKEN: ci-test-admin-token
+      DB_PATH: ":memory:"
 
     steps:
       - uses: actions/checkout@v4
@@ -26,8 +32,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run smoke tests
-        run: python tests/test_smoke.py
+      - name: Run all test suites
+        run: |
+          pytest \
+            tests/test_smoke.py \
+            tests/test_admin_api.py \
+            tests/test_active_learning.py \
+            tests/test_chemical_normalizer.py \
+            tests/test_role_shield.py \
+            tests/test_tenant_api.py \
+            -v --tb=short
 
   dashboard:
     name: Dashboard build
@@ -54,3 +68,4 @@ jobs:
         run: npm run build
         env:
           VITE_API_KEY: ci-placeholder
+          VITE_ADMIN_TOKEN: ci-placeholder

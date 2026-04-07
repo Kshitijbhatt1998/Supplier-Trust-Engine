@@ -3,10 +3,13 @@
 //
 // Auth model:
 //   GET  endpoints (health, stats, suppliers, supplier/{id}) — no key needed.
-//   POST endpoints (score, procure/evaluate) — X-API-Key injected by nginx in
-//   production. In dev, set VITE_API_KEY in dashboard/.env.local.
+//   POST endpoints (score, procure/evaluate) — X-API-Key required.
+//   Admin endpoints — X-Admin-Token required; X-API-Key is NOT injected.
+//   In dev, set VITE_API_KEY and VITE_ADMIN_TOKEN in dashboard/.env.local.
 
 const BASE = '/api/v1'
+const API_KEY    = import.meta.env.VITE_API_KEY
+const ADMIN_TOKEN = import.meta.env.VITE_ADMIN_TOKEN
 
 async function request(path, options = {}) {
   const headers = {
@@ -14,10 +17,10 @@ async function request(path, options = {}) {
     ...(options.headers || {}),
   }
 
-  // Only attach API key for POST endpoints; only present in dev via .env.local
-  const apiKey = import.meta.env.VITE_API_KEY
-  if (apiKey && options.method === 'POST') {
-    headers['X-API-Key'] = apiKey
+  // Inject API key for POST endpoints only, and only when not already
+  // using admin auth (admin endpoints use X-Admin-Token, not X-API-Key).
+  if (API_KEY && options.method === 'POST' && !headers['X-Admin-Token']) {
+    headers['X-API-Key'] = API_KEY
   }
 
   const res = await fetch(`${BASE}${path}`, { ...options, headers })
@@ -39,32 +42,26 @@ export const api = {
   score:     (body)         => request('/score',            { method: 'POST', body: JSON.stringify(body) }),
   procure:   (body)         => request('/procure/evaluate', { method: 'POST', body: JSON.stringify(body) }),
   feedback:  (body)         => request('/resolver/feedback', { method: 'POST', body: JSON.stringify(body) }),
-  
-  // Admin Endpoints
-  adminQueue:  (category)     => {
-    const adminToken = import.meta.env.VITE_ADMIN_TOKEN
+
+  // Admin endpoints — authenticated via X-Admin-Token only
+  adminQueue: (category) => {
     const qs = category ? `?category=${encodeURIComponent(category)}` : ''
-    return request(`/admin/review-queue${qs}`, { headers: { 'X-Admin-Token': adminToken } })
+    return request(`/admin/review-queue${qs}`, { headers: { 'X-Admin-Token': ADMIN_TOKEN } })
   },
-  adminAction: (body)         => {
-    const adminToken = import.meta.env.VITE_ADMIN_TOKEN
-    return request('/admin/alias/action', { 
-      method: 'POST', 
+  adminAction: (body) =>
+    request('/admin/alias/action', {
+      method: 'POST',
       body: JSON.stringify(body),
-      headers: { 'X-Admin-Token': adminToken }
-    })
-  },
-  adminAuditLogs: (category)     => {
-    const adminToken = import.meta.env.VITE_ADMIN_TOKEN
+      headers: { 'X-Admin-Token': ADMIN_TOKEN },
+    }),
+  adminAuditLogs: (category) => {
     const qs = category ? `?category=${encodeURIComponent(category)}` : ''
-    return request(`/admin/audit-logs${qs}`, { headers: { 'X-Admin-Token': adminToken } })
+    return request(`/admin/audit-logs${qs}`, { headers: { 'X-Admin-Token': ADMIN_TOKEN } })
   },
-  adminUndo: (body)         => {
-    const adminToken = import.meta.env.VITE_ADMIN_TOKEN
-    return request('/admin/audit/undo', { 
-      method: 'POST', 
+  adminUndo: (body) =>
+    request('/admin/audit/undo', {
+      method: 'POST',
       body: JSON.stringify(body),
-      headers: { 'X-Admin-Token': adminToken }
-    })
-  },
+      headers: { 'X-Admin-Token': ADMIN_TOKEN },
+    }),
 }

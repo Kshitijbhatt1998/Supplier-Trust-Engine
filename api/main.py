@@ -13,6 +13,8 @@ Auth model:
 import os
 import json
 import uuid
+import hashlib
+import secrets
 from enum import Enum
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -33,9 +35,10 @@ from pipeline.storage.db import init_db
 from model.features import engineer_features, MODEL_FEATURES
 from model.scorer import score_supplier
 from api.decision_engine import DecisionEngine, ProcurementCriteria
-from api.auth import get_api_key, get_admin_key
+from api.auth import get_current_tenant, get_admin_key, Tenant
 from api.resolver import EntityResolver
 from api.chemical_normalizer import _ROLE_NOISE as _CHEM_ROLE_NOISE
+from fastapi import BackgroundTasks
 
 
 # ------------------------------------------------------------------ #
@@ -56,13 +59,14 @@ limiter = Limiter(key_func=get_remote_address)
 # ------------------------------------------------------------------ #
 # App lifespan                                                          #
 # ------------------------------------------------------------------ #
-con = None  # DuckDB connection, initialised in lifespan
+con = None  # Global for internal use, also available via request.app.state.db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global con
     con = init_db()
+    app.state.db = con
     yield
     con.close()
 
@@ -158,6 +162,17 @@ class AdminUndoRequest(BaseModel):
     undo_reason: str = Field(..., min_length=1, max_length=200)
 
 
+class TenantCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    tier: str = Field("tier_1", pattern="^(tier_1|tier_2|enterprise)$")
+
+
+class KeyCreateResponse(BaseModel):
+    tenant_id: str
+    api_key: str
+    prefix: str
+
+
 class TrustScoreResponse(BaseModel):
     supplier_id:          str
     supplier_name:        str
@@ -187,8 +202,30 @@ class ProcureRequest(BaseModel):
 
 
 # ------------------------------------------------------------------ #
-# Internal scoring helper (no auth dependency)                         #
+# Internal Helpers                                                       #
 # ------------------------------------------------------------------ #
+
+def log_usage(tenant_id: str, endpoint: str, method: str, status_code: int):
+    """
+    Background task to log API usage for a tenant.
+    Mitigates DuckDB write latency on the main response thread.
+    """
+    try:
+        # We need a fresh connection or a thread-safe way, but DuckDB 
+        # is generally not thread-safe for writes from multiple connections.
+        # However, for a single worker/process, 'con' is available.
+        con.execute("""
+            INSERT INTO usage_logs (id, tenant_id, endpoint, method, status_code)
+            VALUES (?, ?, ?, ?, ?)
+        """, [uuid.uuid4().hex, tenant_id, endpoint, method, status_code])
+        
+        con.execute("""
+            UPDATE api_keys SET last_used_at = NOW()
+            WHERE tenant_id = ? AND is_active = TRUE
+        """, [tenant_id])
+    except Exception as e:
+        logger.error(f"Failed to log usage for {tenant_id}: {e}")
+
 
 def _score_supplier_by_request(req: ScoreRequest) -> TrustScoreResponse:
     if not req.supplier_id and not req.supplier_name:
@@ -366,16 +403,28 @@ def get_supplier(
 
 @v1.post("/score", response_model=TrustScoreResponse)
 @limiter.limit("10/minute")
-def score(req: ScoreRequest, request: Request, key: str = Depends(get_api_key)):
-    """Score a supplier by ID or name. Requires X-API-Key header."""
-    return _score_supplier_by_request(req)
+def score(
+    req: ScoreRequest, 
+    request: Request, 
+    background_tasks: BackgroundTasks,
+    tenant: Tenant = Depends(get_current_tenant)
+):
+    """Score a supplier by ID or name. Multi-tenant key required."""
+    res = _score_supplier_by_request(req)
+    background_tasks.add_task(log_usage, tenant.id, "/v1/score", "POST", 200)
+    return res
 
 
 @v1.post("/procure/evaluate")
 @limiter.limit("5/minute")
-def procure_evaluate(req: ProcureRequest, request: Request, key: str = Depends(get_api_key)):
+def procure_evaluate(
+    req: ProcureRequest, 
+    request: Request, 
+    background_tasks: BackgroundTasks,
+    tenant: Tenant = Depends(get_current_tenant)
+):
     """
-    AI Procurement Decision Engine.
+    AI Procurement Decision Engine. Requires Multi-tenant key.
 
     An AI micro-business sends procurement criteria; this endpoint queries
     the trust database, applies hard filters, ranks results, and returns
@@ -390,6 +439,7 @@ def procure_evaluate(req: ProcureRequest, request: Request, key: str = Depends(g
           "max_results": 3
         }
     """
+    background_tasks.add_task(log_usage, tenant.id, "/v1/procure/evaluate", "POST", 200)
     criteria = ProcurementCriteria(
         category=req.category,
         min_trust_score=req.min_trust_score,
@@ -428,12 +478,18 @@ def procure_evaluate(req: ProcureRequest, request: Request, key: str = Depends(g
 
 @v1.post("/resolver/feedback")
 @limiter.limit("20/minute")
-def resolver_feedback(req: FeedbackRequest, request: Request, key: str = Depends(get_api_key)):
+def resolver_feedback(
+    req: FeedbackRequest, 
+    request: Request, 
+    background_tasks: BackgroundTasks,
+    tenant: Tenant = Depends(get_current_tenant)
+):
     """
-    User feedback loop. 
-    If confirmed=True: Increment suggestion_count and potentially promote alias.
-    If confirmed=False: Add to rejections list to prevent future suggestions.
+    User feedback loop.
+    If confirmed=True: increment suggestion_count and potentially promote alias.
+    If confirmed=False: add to rejections cache to prevent future suggestions.
     """
+    background_tasks.add_task(log_usage, tenant.id, "/v1/resolver/feedback", "POST", 200)
     resolver = EntityResolver(con)
     normalized = resolver.normalize(req.supplier_name)
     
@@ -715,6 +771,93 @@ def admin_undo(req: AdminUndoRequest, request: Request, key: str = Depends(get_a
         con.execute("ROLLBACK")
         logger.error(f"Undo failed for audit_id={req.audit_id}: {e}")
         raise HTTPException(500, "Undo operation failed. Check server logs.")
+
+
+# ── Tenant Management Endpoints (Admin Token required) ───────────── #
+
+@v1.post("/admin/tenants", response_model=dict)
+@limiter.limit("5/minute")
+def create_tenant(
+    req: TenantCreateRequest, 
+    request: Request, 
+    key: str = Depends(get_admin_key)
+):
+    """Create a new tenant."""
+    tenant_id = uuid.uuid4().hex
+    con.execute("""
+        INSERT INTO tenants (id, name, tier, status)
+        VALUES (?, ?, ?, 'active')
+    """, [tenant_id, req.name, req.tier])
+    
+    return {"tenant_id": tenant_id, "name": req.name, "tier": req.tier}
+
+
+@v1.post("/admin/tenants/{tenant_id}/keys", response_model=KeyCreateResponse)
+@limiter.limit("5/minute")
+def create_tenant_key(
+    tenant_id: str, 
+    request: Request, 
+    key: str = Depends(get_admin_key)
+):
+    """Generate a new API key for a tenant."""
+    # Check if tenant exists
+    tenant = con.execute("SELECT id FROM tenants WHERE id = ?", [tenant_id]).fetchone()
+    if not tenant:
+        raise HTTPException(404, "Tenant not found")
+
+    raw_key = f"dtv_{secrets.token_hex(24)}"
+    hashed = hashlib.sha256(raw_key.encode()).hexdigest()
+    prefix = raw_key[:8]
+
+    con.execute("""
+        INSERT INTO api_keys (hashed_key, tenant_id, prefix, is_active)
+        VALUES (?, ?, ?, TRUE)
+    """, [hashed, tenant_id, prefix])
+    
+    return {
+        "tenant_id": tenant_id,
+        "api_key":   raw_key,
+        "prefix":    prefix
+    }
+
+
+@v1.get("/admin/tenants")
+@limiter.limit("10/minute")
+def list_tenants(request: Request, key: str = Depends(get_admin_key)):
+    """List all tenants and their active keys."""
+    rows = con.execute("""
+        SELECT t.id, t.name, t.tier, t.status, t.created_at, COUNT(k.hashed_key)
+        FROM tenants t
+        LEFT JOIN api_keys k ON k.tenant_id = t.id
+        GROUP BY t.id, t.name, t.tier, t.status, t.created_at
+        ORDER BY t.created_at DESC
+    """).fetchall()
+    
+    return [
+        {
+            "id": r[0], "name": r[1], "tier": r[2], "status": r[3], 
+            "created_at": r[4].isoformat(), "key_count": r[5]
+        } for r in rows
+    ]
+
+
+@v1.get("/admin/usage")
+@limiter.limit("10/minute")
+def get_usage_analytics(request: Request, key: str = Depends(get_admin_key)):
+    """Aggregation of usage across all tenants."""
+    rows = con.execute("""
+        SELECT t.name, u.endpoint, COUNT(*), MAX(u.called_at)
+        FROM usage_logs u
+        JOIN tenants t ON t.id = u.tenant_id
+        GROUP BY t.name, u.endpoint
+        ORDER BY t.name, COUNT(*) DESC
+    """).fetchall()
+    
+    return [
+        {
+            "tenant_name": r[0], "endpoint": r[1], "calls": r[2], "last_call": r[3].isoformat()
+        } for r in rows
+    ]
 
 
 app.include_router(v1)

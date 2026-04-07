@@ -185,20 +185,126 @@ async def verify_gots(
 
 
 # ------------------------------------------------------------------ #
+# GRS Verifier (Global Recycled Standard)                               #
+# ------------------------------------------------------------------ #
+
+async def verify_grs(
+    page: Page,
+    supplier_name: str,
+    supplier_id: str,
+    license_id: Optional[str] = None,
+) -> dict:
+    """
+    Check the Textile Exchange GRS / RCS integrity portal.
+
+    GRS (Global Recycled Standard) certifies recycled content in
+    textile products. Certificates are issued by approved bodies
+    (Control Union, Bureau Veritas, TÜV Rheinland, etc.) and
+    searchable through Textile Exchange's public integrity system.
+
+    URL: https://textileexchange.org/integrity/
+    Scope filter: ?scope=GRS
+
+    Note: Textile Exchange's portal may require a JS-rendered table.
+    If the integrity portal changes, fall back to Control Union's
+    certificate database: https://certification.controlunion.com/
+
+    TODO: Confirm selectors by inspecting the live DOM at
+          https://textileexchange.org/integrity/?scope=GRS
+    """
+    result = {
+        "supplier_id": supplier_id,
+        "source": "grs",
+        "license_id": license_id,
+        "status": "not_found",
+        "valid_until": None,
+        "certificate_name": None,
+    }
+
+    try:
+        await page.goto(
+            "https://textileexchange.org/integrity/?scope=GRS",
+            wait_until="networkidle",
+            timeout=25000,
+        )
+        await asyncio.sleep(2)
+
+        search_term = license_id or supplier_name
+
+        # TODO: Confirm selector after inspecting textileexchange.org/integrity
+        search_input = await page.query_selector(
+            "input[type='search'], input[placeholder*='search' i], "
+            "input[placeholder*='company' i], input[type='text']"
+        )
+        if not search_input:
+            logger.warning(f"GRS: Could not find search input for {supplier_name}")
+            return result
+
+        await search_input.fill(search_term)
+        await asyncio.sleep(1)
+
+        submit_btn = await page.query_selector("button[type='submit'], .search-submit")
+        if submit_btn:
+            await submit_btn.click()
+        else:
+            await search_input.press("Enter")
+
+        await page.wait_for_load_state("networkidle", timeout=15000)
+        await asyncio.sleep(2)
+
+        # TODO: Adjust selectors to match GRS result table structure
+        rows = await page.query_selector_all(
+            "table tbody tr, .certificate-row, .integrity-result-row"
+        )
+
+        for row in rows:
+            row_text = (await row.inner_text()).lower()
+            if supplier_name.lower()[:10] in row_text:
+                result["status"] = "valid"
+                result["certificate_name"] = supplier_name
+
+                # Try to find expiry date in the row
+                date_match = re.search(
+                    r"\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}|\d{2}\.\d{2}\.\d{4}",
+                    row_text,
+                )
+                if date_match:
+                    result["valid_until"] = _parse_date(date_match.group())
+
+                # Try to extract the certificate/license ID
+                id_match = re.search(r"[A-Z]{2,4}[-/]\d{4,}", row_text.upper())
+                if id_match and not license_id:
+                    result["license_id"] = id_match.group()
+
+                break
+
+        logger.info(f"GRS [{supplier_name}]: {result['status']}")
+
+    except Exception as e:
+        logger.warning(f"GRS verification failed for {supplier_name}: {e}")
+        result["status"] = "error"
+
+    return result
+
+
+# ------------------------------------------------------------------ #
 # Orchestrator: verify all suppliers in DuckDB                          #
 # ------------------------------------------------------------------ #
 
 async def verify_all_suppliers(limit: int = 100) -> None:
     """
-    Pull all suppliers from DuckDB, verify their certifications,
-    and write results back.
+    Pull all textile suppliers from DuckDB, verify their certifications
+    against OEKO-TEX, GOTS, and GRS portals, and write results back.
     """
     con = init_db()
-    suppliers = con.execute(
-        f"SELECT id, name FROM suppliers LIMIT {limit}"
-    ).fetchall()
+    # Only verify textile suppliers — chemical suppliers don't carry fabric certs
+    suppliers = con.execute("""
+        SELECT id, name FROM suppliers
+        WHERE COALESCE(category, 'textile') = 'textile'
+        LIMIT ?
+    """, [limit]).fetchall()
 
-    logger.info(f"Verifying certifications for {len(suppliers)} suppliers...")
+    logger.info(f"Verifying certifications for {len(suppliers)} textile suppliers...")
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
@@ -219,14 +325,18 @@ async def verify_all_suppliers(limit: int = 100) -> None:
             async with semaphore:
                 page = await context.new_page()
                 try:
-                    # Run both verifiers per supplier
                     oekotex_result = await verify_oekotex(page, supplier_name, supplier_id)
                     upsert_certification(con, oekotex_result)
 
-                    await asyncio.sleep(2)  # Pause between portals
+                    await asyncio.sleep(2)
 
                     gots_result = await verify_gots(page, supplier_name, supplier_id)
                     upsert_certification(con, gots_result)
+
+                    await asyncio.sleep(2)
+
+                    grs_result = await verify_grs(page, supplier_name, supplier_id)
+                    upsert_certification(con, grs_result)
 
                 finally:
                     await page.close()

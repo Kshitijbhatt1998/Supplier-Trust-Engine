@@ -54,6 +54,7 @@ def engineer_features(con: Optional[duckdb.DuckDBPyConnection] = None) -> pd.Dat
             COUNT(DISTINCT c.id) FILTER (WHERE c.status = 'expired') AS expired_cert_count,
             COUNT(DISTINCT c.id) FILTER (WHERE c.source = 'oekotex' AND c.status = 'valid') AS oekotex_valid,
             COUNT(DISTINCT c.id) FILTER (WHERE c.source = 'gots'    AND c.status = 'valid') AS gots_valid,
+            COUNT(DISTINCT c.id) FILTER (WHERE c.source = 'grs'     AND c.status = 'valid') AS grs_valid,
             -- Manifest verification count
             COUNT(DISTINCT sh.id) AS verified_shipment_count
         FROM suppliers s
@@ -128,13 +129,15 @@ def engineer_features(con: Optional[duckdb.DuckDBPyConnection] = None) -> pd.Dat
     ).clip(upper=50)
 
     # ------------------------------------------------------------------ #
-    # Feature 6: certification_score (0–3)                                 #
-    # GOTS = 2 pts (hardest to fake), OEKO-TEX = 1 pt                     #
+    # Feature 6: certification_score (0–4)                                 #
+    # GOTS = 2 pts (hardest to fake), OEKO-TEX = 1 pt, GRS = 1 pt        #
+    # Max attainable: GOTS(2) + OEKO-TEX(1) + GRS(1) = 4                 #
     # ------------------------------------------------------------------ #
     suppliers["certification_score"] = (
-        suppliers["gots_valid"] * 2 +
-        suppliers["oekotex_valid"] * 1
-    ).clip(upper=3)
+        suppliers["gots_valid"]    * 2 +
+        suppliers["oekotex_valid"] * 1 +
+        suppliers["grs_valid"]     * 1
+    ).clip(upper=4)
 
     suppliers["has_any_valid_cert"] = (suppliers["valid_cert_count"] > 0).astype(int)
     suppliers["has_expired_cert"] = (suppliers["expired_cert_count"] > 0).astype(int)

@@ -136,15 +136,59 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
         );
     """)
 
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS tenants (
+            id                 VARCHAR PRIMARY KEY,   -- uuid4 hex
+            name               VARCHAR NOT NULL,
+            tier               VARCHAR DEFAULT 'tier_1', -- 'tier_1', 'tier_2', 'enterprise'
+            status             VARCHAR DEFAULT 'active', -- 'active', 'suspended'
+            created_at         TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS api_keys (
+            hashed_key         VARCHAR PRIMARY KEY,   -- sha256 of raw key
+            tenant_id          VARCHAR REFERENCES tenants(id),
+            prefix             VARCHAR NOT NULL,      -- first 8 chars for display
+            is_active          BOOLEAN DEFAULT TRUE,
+            created_at         TIMESTAMP DEFAULT NOW(),
+            last_used_at       TIMESTAMP
+        );
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS usage_logs (
+            id                 VARCHAR PRIMARY KEY,   -- uuid4 hex
+            tenant_id          VARCHAR REFERENCES tenants(id),
+            endpoint           VARCHAR NOT NULL,      -- e.g. '/v1/score'
+            method             VARCHAR NOT NULL,      -- e.g. 'POST'
+            status_code        INTEGER,
+            called_at          TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
     # ---------------------------------------------------------------- #
     # Schema migrations — safe to run on existing databases            #
     # ---------------------------------------------------------------- #
-    # ALTER TABLE ADD COLUMN IF NOT EXISTS is idempotent in DuckDB 0.8+
-    con.execute("ALTER TABLE suppliers      ADD COLUMN IF NOT EXISTS category VARCHAR DEFAULT 'textile'")
-    con.execute("ALTER TABLE entity_aliases ADD COLUMN IF NOT EXISTS category VARCHAR DEFAULT 'textile'")
-    con.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS snapshot_json VARCHAR")
-    con.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS is_undone     BOOLEAN DEFAULT FALSE")
-    con.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS undo_reason   VARCHAR")
+    # DuckDB 1.5+ raises DependencyException on ALTER TABLE when any
+    # index exists on the target table, even for a true no-op column
+    # addition. Guard every migration with an explicit column-existence
+    # check so we skip the ALTER entirely when already applied.
+    def _has_column(table: str, column: str) -> bool:
+        rows = con.execute(f"PRAGMA table_info('{table}')").fetchall()
+        return any(r[1] == column for r in rows)
+
+    if not _has_column("suppliers", "category"):
+        con.execute("ALTER TABLE suppliers ADD COLUMN category VARCHAR DEFAULT 'textile'")
+    if not _has_column("entity_aliases", "category"):
+        con.execute("ALTER TABLE entity_aliases ADD COLUMN category VARCHAR DEFAULT 'textile'")
+    if not _has_column("admin_audit_log", "snapshot_json"):
+        con.execute("ALTER TABLE admin_audit_log ADD COLUMN snapshot_json VARCHAR")
+    if not _has_column("admin_audit_log", "is_undone"):
+        con.execute("ALTER TABLE admin_audit_log ADD COLUMN is_undone BOOLEAN DEFAULT FALSE")
+    if not _has_column("admin_audit_log", "undo_reason"):
+        con.execute("ALTER TABLE admin_audit_log ADD COLUMN undo_reason VARCHAR")
 
     # Indexes on hot query paths
     con.execute("CREATE INDEX IF NOT EXISTS idx_trust_score      ON trust_scores(trust_score)")
@@ -157,6 +201,9 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
     con.execute("CREATE INDEX IF NOT EXISTS idx_alias_category   ON entity_aliases(category)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_supplier_category ON suppliers(category)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_audit_acted_at    ON admin_audit_log(acted_at DESC)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_usage_tenant      ON usage_logs(tenant_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_usage_called_at   ON usage_logs(called_at DESC)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_tenant   ON api_keys(tenant_id)")
 
     # ---------------------------------------------------------------- #
     # resolver_config — Laplace-smoothed rejection rate per canonical.  #
