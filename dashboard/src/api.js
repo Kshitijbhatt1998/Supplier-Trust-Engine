@@ -2,28 +2,55 @@
 // and through nginx (/api/*) in production.
 //
 // Auth model:
-//   GET  endpoints (health, stats, suppliers, supplier/{id}) — no key needed.
-//   POST endpoints (score, procure/evaluate) — X-API-Key required.
-//   Admin endpoints — X-Admin-Token required; X-API-Key is NOT injected.
-//   In dev, set VITE_API_KEY and VITE_ADMIN_TOKEN in dashboard/.env.local.
+//   - Dashboard GET endpoints (health, stats, suppliers, supplier/{id}) — public.
+//   - POST endpoints (score, procure/evaluate) — X-API-Key or JWT required.
+//   - Admin endpoints — X-Admin-Token or JWT Bearer required.
+//
+// Token storage:
+//   JWT is stored in localStorage as 'token'.
 
 const BASE = '/api/v1'
-const API_KEY    = import.meta.env.VITE_API_KEY
-const ADMIN_TOKEN = import.meta.env.VITE_ADMIN_TOKEN
 
-async function request(path, options = {}) {
+// Static tokens for dev/fallback (from .env.local)
+const STATIC_API_KEY    = import.meta.env.VITE_API_KEY
+const STATIC_ADMIN_TOKEN = import.meta.env.VITE_ADMIN_TOKEN
+
+function getAuthHeaders(options = {}) {
   const headers = {
     'Content-Type': 'application/json',
     ...(options.headers || {}),
   }
 
-  // Inject API key for POST endpoints only, and only when not already
-  // using admin auth (admin endpoints use X-Admin-Token, not X-API-Key).
-  if (API_KEY && options.method === 'POST' && !headers['X-Admin-Token']) {
-    headers['X-API-Key'] = API_KEY
+  // 1. Try JWT Bearer (Preferred)
+  const token = localStorage.getItem('token')
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
   }
 
+  // 2. Inject Static API key for POST endpoints if no JWT exists
+  if (!token && STATIC_API_KEY && options.method === 'POST' && !headers['X-Admin-Token']) {
+    headers['X-API-Key'] = STATIC_API_KEY
+  }
+
+  // 3. Inject Static Admin Token if no JWT exists and we need it
+  if (!token && STATIC_ADMIN_TOKEN && !headers['Authorization'] && (options.headers && options.headers['X-Admin-Token'])) {
+    headers['X-Admin-Token'] = STATIC_ADMIN_TOKEN
+  }
+
+  return headers
+}
+
+async function request(path, options = {}) {
+  const headers = getAuthHeaders(options)
   const res = await fetch(`${BASE}${path}`, { ...options, headers })
+
+  if (res.status === 401) {
+    // Handle unauthorized - clear token and potentially redirect
+    localStorage.removeItem('token')
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
@@ -33,6 +60,34 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  // Auth
+  login: async (email, password) => {
+    const formData = new FormData()
+    formData.append('username', email)
+    formData.append('password', password)
+    
+    const res = await fetch(`${BASE}/auth/login`, {
+      method: 'POST',
+      body: formData,
+    })
+    
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Login failed' }))
+        throw new Error(err.detail || 'Login failed')
+    }
+    
+    const data = await res.json()
+    localStorage.setItem('token', data.access_token)
+    return data
+  },
+  
+  logout: () => {
+    localStorage.removeItem('token')
+    window.location.href = '/login'
+  },
+  
+  me: () => request('/auth/me'),
+
   health:    ()             => request('/health'),
   stats:     ()             => request('/stats'),
   suppliers: (params = {})  => {
@@ -43,25 +98,28 @@ export const api = {
   procure:   (body)         => request('/procure/evaluate', { method: 'POST', body: JSON.stringify(body) }),
   feedback:  (body)         => request('/resolver/feedback', { method: 'POST', body: JSON.stringify(body) }),
 
-  // Admin endpoints — authenticated via X-Admin-Token only
+  // Admin endpoints
   adminQueue: (category) => {
     const qs = category ? `?category=${encodeURIComponent(category)}` : ''
-    return request(`/admin/review-queue${qs}`, { headers: { 'X-Admin-Token': ADMIN_TOKEN } })
+    return request(`/admin/review-queue${qs}`)
   },
   adminAction: (body) =>
     request('/admin/alias/action', {
       method: 'POST',
       body: JSON.stringify(body),
-      headers: { 'X-Admin-Token': ADMIN_TOKEN },
     }),
   adminAuditLogs: (category) => {
     const qs = category ? `?category=${encodeURIComponent(category)}` : ''
-    return request(`/admin/audit-logs${qs}`, { headers: { 'X-Admin-Token': ADMIN_TOKEN } })
+    return request(`/admin/audit-logs${qs}`)
   },
   adminUndo: (body) =>
     request('/admin/audit/undo', {
       method: 'POST',
       body: JSON.stringify(body),
-      headers: { 'X-Admin-Token': ADMIN_TOKEN },
     }),
+    
+  // Tenant Management
+  listTenants: () => request('/admin/tenants'),
+  createTenant: (body) => request('/admin/tenants', { method: 'POST', body: JSON.stringify(body) }),
+  getUsage: () => request('/admin/usage'),
 }

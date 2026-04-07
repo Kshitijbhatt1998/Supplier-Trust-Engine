@@ -168,6 +168,19 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
         );
     """)
 
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id                 VARCHAR PRIMARY KEY,   -- uuid4 hex
+            email              VARCHAR UNIQUE NOT NULL,
+            hashed_password    VARCHAR NOT NULL,
+            full_name          VARCHAR,
+            role               VARCHAR DEFAULT 'viewer', -- 'admin', 'tenant_admin', 'viewer'
+            tenant_id          VARCHAR REFERENCES tenants(id),
+            created_at         TIMESTAMP DEFAULT NOW(),
+            last_login         TIMESTAMP
+        );
+    """)
+
     # ---------------------------------------------------------------- #
     # Schema migrations — safe to run on existing databases            #
     # ---------------------------------------------------------------- #
@@ -204,6 +217,8 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
     con.execute("CREATE INDEX IF NOT EXISTS idx_usage_tenant      ON usage_logs(tenant_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_usage_called_at   ON usage_logs(called_at DESC)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_tenant   ON api_keys(tenant_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_users_email        ON users(email)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_users_tenant       ON users(tenant_id)")
 
     # ---------------------------------------------------------------- #
     # resolver_config — Laplace-smoothed rejection rate per canonical.  #

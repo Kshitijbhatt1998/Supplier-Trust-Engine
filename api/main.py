@@ -19,11 +19,11 @@ from typing import Optional
 from contextlib import asynccontextmanager
 
 import sentry_sdk
-from fastapi import FastAPI, HTTPException, Depends, Request, Query
+from fastapi import FastAPI, HTTPException, Depends, Request, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, EmailStr
 from loguru import logger
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -34,10 +34,16 @@ from pipeline.storage.db import init_db
 from model.features import engineer_features, MODEL_FEATURES
 from model.scorer import score_supplier
 from api.decision_engine import DecisionEngine, ProcurementCriteria
-from api.auth import get_current_tenant, get_admin_key, Tenant, hash_key
+from api.auth import (
+    get_current_tenant, get_admin_key, get_current_user, 
+    verify_password, create_access_token, Tenant, User, 
+    ACCESS_TOKEN_EXPIRE_MINUTES
+)
 from api.resolver import EntityResolver
 from api.chemical_normalizer import _ROLE_NOISE as _CHEM_ROLE_NOISE
 from fastapi import BackgroundTasks
+from fastapi.security import OAuth2PasswordRequestForm
+from datetime import timedelta
 
 
 # ------------------------------------------------------------------ #
@@ -168,6 +174,25 @@ class AdminUndoRequest(BaseModel):
 class TenantCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     tier: str = Field("tier_1", pattern="^(tier_1|tier_2|enterprise)$")
+
+class UserCreateRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+    full_name: Optional[str] = None
+    role: str = Field("viewer", pattern="^(admin|tenant_admin|viewer)$")
+    tenant_id: Optional[str] = None
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    full_name: Optional[str]
+    role: str
+    tenant_id: Optional[str]
+    created_at: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
 
 class KeyCreateResponse(BaseModel):
@@ -328,6 +353,45 @@ def _score_supplier_by_request(req: ScoreRequest) -> TrustScoreResponse:
 # v1 Router                                                             #
 # ------------------------------------------------------------------ #
 v1 = APIRouter(prefix="/v1")
+
+
+# ── Authentication Endpoints ───────────────────────────────────── #
+
+@v1.post("/auth/login", response_model=Token)
+@limiter.limit("5/minute")
+async def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends()
+):
+    """ Authenticate user and return JWT token. """
+    con = request.app.state.db
+    row = con.execute("""
+        SELECT email, hashed_password FROM users WHERE email = ?
+    """, [form_data.username]).fetchone()
+    
+    if not row or not verify_password(form_data.password, row[1]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": row[0]}, expires_delta=access_token_expires
+    )
+    
+    # Update last login
+    con.execute("UPDATE users SET last_login = NOW() WHERE email = ?", [row[0]])
+    
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@v1.get("/auth/me", response_model=User)
+@limiter.limit("30/minute")
+async def get_me(current_user: User = Depends(get_current_user)):
+    """ Return the current logged-in user profile. """
+    return current_user
 
 
 # ── Public / dashboard-facing GET endpoints ──────────────────────── #

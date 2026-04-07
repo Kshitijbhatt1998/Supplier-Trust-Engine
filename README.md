@@ -18,6 +18,33 @@ Global B2B procurement is broken:
 
 ## What It Does
 
+## 🛡 Security & Authentication
+
+The Supplier Trust Engine uses a multi-tier authentication model:
+
+1.  **Dashboard Access**: Users must log in via the dashboard with an email and password. This is secured with **Bcrypt** hashing and **JWT** session tokens.
+2.  **API Access (for AI Agents)**: External callers use an `X-API-Key` header. These keys are linked to specific tenants and are hashed (SHA-256) in the database.
+3.  **Super-User Access**: Developers can use the `X-Admin-Token` header for emergency administrative operations.
+
+### Quickstart (Local)
+
+1.  **Clone & Install**: `pip install -r requirements.txt`
+2.  **Seed Database**: `python seed_db.py`
+3.  **Seed Admin User**: `python scripts/seed_users.py` (Creates `admin@datavibe.io` with password `admin_password_123`)
+4.  **Run API**: `python api/main.py`
+5.  **Run Dashboard**: `cd dashboard && npm install && npm run dev`
+
+---
+
+## 🗺 Roadmap
+
+- [x] **Multi-Tenant API Infrastructure**: Distinct API keys, tenant isolation, and usage tracking.
+- [x] **Identity Management System**: JWT-based user authentication and RBAC.
+- [x] **Secure Token Hashing**: SHA-256 for API keys and Bcrypt for passwords.
+- [ ] **Chem/Polymer Expansion**: Seed specialized models for chemical manufacturing trust.
+- [ ] **Autonomous GRS Verification**: Real-time Global Recycled Standard certification scraping.
+- [ ] **Tiered Rate Limiting**: Enforce hard quotas based on tenant subscription levels.
+
 The Supplier Trust Engine automates the entire supplier vetting workflow:
 
 1. **Scrapes** supplier shipment history from ImportYeti (US customs manifests)
