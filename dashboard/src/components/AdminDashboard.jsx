@@ -45,6 +45,19 @@ function ThresholdBadge({ threshold, rejections, verifications }) {
   );
 }
 
+function RoleWarningBadge({ alias }) {
+  // is_role_warning comes from resolver metadata stored on the alias row
+  if (!alias.is_role_warning) return null;
+  return (
+    <span
+      className="role-warning-badge"
+      title="Surrogate match — a C/O, VIA, or BY cluster was stripped. Verify the true manufacturer."
+    >
+      ⚠ Surrogate
+    </span>
+  );
+}
+
 function CasBadge({ casNumber }) {
   if (!casNumber) return null;
   const url = `https://commonchemistry.cas.org/detail?cas_rn=${casNumber}`;
@@ -268,7 +281,10 @@ export default function AdminDashboard() {
                         <td className="priority-cell">
                           <span className="priority-badge">{(alias.priority_score * 100).toFixed(0)}</span>
                         </td>
-                        <td className="alias-name">{alias.alias_name}</td>
+                        <td className="alias-name">
+                          {alias.alias_name}
+                          <RoleWarningBadge alias={alias} />
+                        </td>
                         <td><VisualDiff search={alias.alias_name} canonical={group.name} /></td>
                         <td className="score-cell">{alias.match_score.toFixed(0)}%</td>
                         <td className="action-cell">
@@ -339,6 +355,7 @@ export default function AdminDashboard() {
         .threshold-detail { opacity: 0.5; font-weight: 400; font-size: 0.65rem; }
         
         .cas-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; background: rgba(139, 92, 246, 0.2); color: #c084fc; text-decoration: none; }
+        .role-warning-badge { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 8px; font-size: 0.68rem; font-weight: 700; background: rgba(251, 146, 60, 0.18); color: #fb923c; vertical-align: middle; }
         
         .action-bar { background: rgba(94, 247, 255, 0.05); border: 1px solid rgba(94, 247, 255, 0.2); border-radius: 12px; padding: 12px 20px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; }
         .aurora-border { box-shadow: 0 0 15px rgba(94, 247, 255, 0.1); }
