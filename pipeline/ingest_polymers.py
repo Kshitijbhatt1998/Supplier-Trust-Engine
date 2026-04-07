@@ -53,12 +53,12 @@ def run_ingestion():
                 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, category = EXCLUDED.category
             """, [p['id'], p['name'], p['country'], p['category']])
             
-            # Upsert Trust Score
+            # Upsert Trust Score (schema: supplier_id, trust_score, risk_label, scored_at)
             con.execute("""
-                INSERT INTO trust_scores (supplier_id, trust_score, risk_probability, updated_at)
-                VALUES (?, ?, ?, NOW())
+                INSERT INTO trust_scores (supplier_id, trust_score, risk_label)
+                VALUES (?, ?, 0)
                 ON CONFLICT (supplier_id) DO UPDATE SET trust_score = EXCLUDED.trust_score
-            """, [p['id'], p.get('trust', 80), 0.02])
+            """, [p['id'], p.get('trust', 80)])
             
             logger.debug(f"Seeded canonical: {p['name']} ({p['id']})")
 

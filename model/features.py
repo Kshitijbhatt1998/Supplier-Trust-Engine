@@ -31,7 +31,11 @@ def engineer_features(con: Optional[duckdb.DuckDBPyConnection] = None) -> pd.Dat
     if con is None:
         con = init_db()
 
-    # --- Base supplier data ---
+    # --- Base supplier data (textile category only) ---
+    # Chemical/Polymer suppliers use manually-seeded trust scores and a
+    # category-specific model that does not yet exist.  Passing them through
+    # textile features (GOTS, OEKO-TEX, shipment-frequency) produces
+    # meaningless scores that would overwrite the hand-seeded values.
     suppliers = con.execute("""
         SELECT
             s.id,
@@ -55,6 +59,7 @@ def engineer_features(con: Optional[duckdb.DuckDBPyConnection] = None) -> pd.Dat
         FROM suppliers s
         LEFT JOIN certifications c ON c.supplier_id = s.id
         LEFT JOIN shipments sh ON sh.supplier_id = s.id
+        WHERE COALESCE(s.category, 'textile') = 'textile'
         GROUP BY s.id, s.name, s.country, s.shipment_count,
                  s.avg_monthly_shipments, s.total_buyers,
                  s.hs_codes, s.top_buyers,

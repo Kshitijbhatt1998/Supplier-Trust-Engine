@@ -34,6 +34,7 @@ from model.scorer import score_supplier
 from api.decision_engine import DecisionEngine, ProcurementCriteria
 from api.auth import get_api_key, get_admin_key
 from api.resolver import EntityResolver
+from api.chemical_normalizer import _ROLE_NOISE as _CHEM_ROLE_NOISE
 
 
 # ------------------------------------------------------------------ #
@@ -517,7 +518,8 @@ def admin_review_queue(
             "rejection_count":    r[10],
             "verification_count": r[11],
             "adaptive_threshold": round(_threshold(float(r[12])), 1),
-            "cas_number":         _cas_from_id(r[3]),  # None for non-chemical entities
+            "cas_number":         _cas_from_id(r[3]),
+            "is_role_warning":    bool(_CHEM_ROLE_NOISE.search(r[1] or "")),
         }
         for r in rows
     ]
