@@ -53,7 +53,11 @@ if _sentry_dsn:
 # ------------------------------------------------------------------ #
 # Rate limiter                                                          #
 # ------------------------------------------------------------------ #
-limiter = Limiter(key_func=get_remote_address)
+# Disable request rate limiting in test mode to avoid shared TestClient
+# IP throttling across multiple test cases. Production behavior remains
+# unchanged.
+limiter_enabled = os.getenv("TESTING", "").lower() not in ("1", "true", "yes")
+limiter = Limiter(key_func=get_remote_address, enabled=limiter_enabled)
 
 
 # ------------------------------------------------------------------ #

@@ -19,3 +19,7 @@ def pytest_configure(config):
     # Force every test that triggers init_db() to use an in-memory DB
     # unless the caller explicitly overrides (e.g. integration tests)
     os.environ.setdefault("DB_PATH", ":memory:")
+
+    # Disable global rate limiting during unit tests to avoid shared
+    # TestClient IP throttling on admin endpoints.
+    os.environ.setdefault("TESTING", "1")
