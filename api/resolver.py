@@ -136,8 +136,9 @@ class EntityResolver:
         }
         """
         # --- CAS short-circuit (chemical category only) ---
+        is_surrogate = False
         if self._chem:
-            cas_id, normalized = self._chem.normalize_for_cas(name)
+            cas_id, normalized, is_surrogate = self._chem.normalize_for_cas(name)
             if cas_id:
                 # CAS number present and checksum-valid: bypass fuzzy entirely
                 row = self.con.execute(
@@ -152,6 +153,7 @@ class EntityResolver:
                         'match_type':           'cas_exact',
                         'is_verified':          True,
                         'is_subsidiary_warning': False,
+                        'is_role_warning':       is_surrogate,
                         'low_confidence':       False,
                     }
         else:
@@ -174,7 +176,8 @@ class EntityResolver:
                 'match_score': alias_row[1],
                 'match_type': 'alias',
                 'is_verified': bool(alias_row[2]),
-                'is_subsidiary_warning': False
+                'is_subsidiary_warning': False,
+                'is_role_warning': is_surrogate
             }
 
         # --- Step 2: Exact Name Match ---
@@ -191,7 +194,8 @@ class EntityResolver:
                 'match_score': 100.0,
                 'match_type': 'exact',
                 'is_verified': True,
-                'is_subsidiary_warning': False
+                'is_subsidiary_warning': False,
+                'is_role_warning': is_surrogate
             }
 
         # --- Step 3: Fuzzy Scan (Blocked by Country & Negative Feedback) ---
@@ -232,6 +236,7 @@ class EntityResolver:
                     'match_score': score,
                     'is_verified': False,
                     'is_subsidiary_warning': is_sub,
+                    'is_role_warning': is_surrogate
                 }
 
         # --- Step 4: Logic Decision & Registration ---
