@@ -74,6 +74,8 @@ class ImportYetiScraper:
         os.makedirs("data", exist_ok=True)
         with open(self.SESSION_FILE, "w") as f:
             json.dump(cookies, f)
+        # Restrict to owner read/write only — session cookies are sensitive
+        os.chmod(self.SESSION_FILE, 0o600)
         logger.info("Session cookies saved.")
 
     async def _load_session(self, context: BrowserContext) -> bool:
