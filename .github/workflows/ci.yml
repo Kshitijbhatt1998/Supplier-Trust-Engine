@@ -40,6 +40,7 @@ jobs:
             tests/test_active_learning.py \
             tests/test_chemical_normalizer.py \
             tests/test_role_shield.py \
+            tests/test_tenant_api.py \
             -v --tb=short
 
   dashboard:
