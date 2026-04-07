@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  dependency-graph: write
 
 jobs:
   test:
@@ -69,3 +70,26 @@ jobs:
         env:
           VITE_API_KEY: ci-placeholder
           VITE_ADMIN_TOKEN: ci-placeholder
+
+  submit-pypi:
+    name: Submit Python dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      dependency-graph: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Generate pip dependencies
+        run: pip install --quiet pip-tools && pip-compile requirements.in -o requirements.txt --resolver=backtracking 2>/dev/null || true
+
+      - name: Submit dependencies to GitHub
+        uses: github/dependency-submission-action@v4
+        with:
+          dependency-files: requirements.txt
+          snapshot-warning: false
