@@ -131,6 +131,11 @@ class AdminActionRequest(BaseModel):
     reason_code: Optional[str] = None
 
 
+class AdminUndoRequest(BaseModel):
+    audit_id:    str
+    undo_reason: str = Field(..., min_length=1, max_length=200)
+
+
 class TrustScoreResponse(BaseModel):
     supplier_id:          str
     supplier_name:        str
@@ -529,20 +534,35 @@ def admin_alias_action(req: AdminActionRequest, request: Request, key: str = Dep
     if req.action not in ('verify', 'reject'):
         raise HTTPException(400, f"Invalid action '{req.action}': must be 'verify' or 'reject'")
 
-    # Resolve canonical_id of the first alias for grouping in the audit log
-    first_row = con.execute(
-        "SELECT canonical_id FROM entity_aliases WHERE id = ?", [req.alias_ids[0]]
-    ).fetchone()
+    # Capture snapshots for restoration / audit (Snapshot Version 1)
+    alias_rows = con.execute("""
+        SELECT id, alias_name, alias_normalized, canonical_id, match_score, suggestion_count, category
+        FROM entity_aliases WHERE id IN (SELECT UNNEST(?))
+    """, [req.alias_ids]).fetchall()
+
+    if not alias_rows:
+         raise HTTPException(404, "None of the targeting aliases were found")
+
+    snapshot = {
+        "version": 1,
+        "data": [
+            {
+                "id": r[0], "name": r[1], "normalized": r[2], "canonical_id": r[3],
+                "score": r[4], "count": r[5], "category": r[6]
+            } for r in alias_rows
+        ]
+    }
 
     con.execute("""
-        INSERT INTO admin_audit_log (id, action, alias_ids, canonical_id, reason_code)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO admin_audit_log (id, action, alias_ids, canonical_id, reason_code, snapshot_json)
+        VALUES (?, ?, ?, ?, ?, ?)
     """, [
         uuid.uuid4().hex,
         req.action,
         json.dumps(req.alias_ids),
-        first_row[0] if first_row else None,
+        alias_rows[0][3], # Use first one for grouping
         req.reason_code,
+        json.dumps(snapshot)
     ])
 
     if req.action == 'verify':
@@ -565,6 +585,104 @@ def admin_alias_action(req: AdminActionRequest, request: Request, key: str = Dep
                 con.execute("DELETE FROM entity_aliases WHERE id = ?", [aid])
                 
     return {"status": "success", "count": len(req.alias_ids)}
+
+
+@v1.get("/admin/audit-logs")
+@limiter.limit("20/minute")
+def admin_audit_logs(
+    request: Request,
+    key:      str = Depends(get_admin_key),
+    category: Optional[str] = Query(None)
+):
+    """Returns recent administrative actions."""
+    query = """
+        SELECT
+            l.id, l.action, l.alias_ids, l.canonical_id, s.name AS canonical_name,
+            l.reason_code, l.acted_at, l.is_undone, l.undo_reason
+        FROM admin_audit_log l
+        LEFT JOIN suppliers s ON s.id = l.canonical_id
+        WHERE 1=1
+    """
+    params = []
+    if category:
+        query += " AND s.category = ?"
+        params.append(category)
+
+    query += " ORDER BY l.acted_at DESC LIMIT 50"
+    rows = con.execute(query, params).fetchall()
+
+    return [
+        {
+            "id": r[0], "action": r[1], "alias_ids": json.loads(r[2]),
+            "canonical_id": r[3], "canonical_name": r[4], "reason_code": r[5],
+            "acted_at": r[6].isoformat(), "is_undone": bool(r[7]), "undo_reason": r[8]
+        } for r in rows
+    ]
+
+
+@v1.post("/admin/audit/undo")
+@limiter.limit("5/minute")
+def admin_undo(req: AdminUndoRequest, request: Request, key: str = Depends(get_admin_key)):
+    """Atomic reversal of a previous admin action (24h window)."""
+    log = con.execute("""
+        SELECT action, alias_ids, snapshot_json, is_undone, acted_at
+        FROM admin_audit_log WHERE id = ?
+    """, [req.audit_id]).fetchone()
+
+    if not log:
+        raise HTTPException(404, "Audit entry not found")
+    if log[3]: # is_undone
+        raise HTTPException(400, "Action already undone")
+
+    # 24-hour safety window check
+    import datetime
+    if log[4] < datetime.datetime.now() - datetime.timedelta(days=1):
+        raise HTTPException(400, "Undo window (24h) has expired")
+
+    action = log[0]
+    alias_ids = json.loads(log[1])
+    snapshot = json.loads(log[2])
+
+    try:
+        con.execute("BEGIN TRANSACTION")
+
+        if action == 'verify':
+            # Reverse verify: set to false and PENALISE the suggestion count
+            con.execute("""
+                UPDATE entity_aliases
+                SET is_verified = FALSE,
+                    suggestion_count = GREATEST(suggestion_count - 1, 0)
+                WHERE id IN (SELECT UNNEST(?))
+            """, [alias_ids])
+
+        elif action == 'reject':
+            # Restore from snapshot and purge from rejections
+            for item in snapshot["data"]:
+                 con.execute("""
+                    INSERT INTO entity_aliases (id, alias_name, alias_normalized, canonical_id, match_score, suggestion_count, is_verified, category)
+                    VALUES (?, ?, ?, ?, ?, ?, FALSE, ?)
+                    ON CONFLICT(id) DO UPDATE SET is_verified = FALSE
+                 """, [item['id'], item['name'], item['normalized'], item['canonical_id'], item['score'], item['count'], item['category']])
+
+                 con.execute("""
+                    DELETE FROM entity_rejections
+                    WHERE alias_normalized = ? AND canonical_id = ?
+                 """, [item['normalized'], item['canonical_id']])
+
+        # Mark log as undone
+        con.execute("""
+            UPDATE admin_audit_log
+            SET is_undone = TRUE, undo_reason = ?
+            WHERE id = ?
+        """, [req.undo_reason, req.audit_id])
+
+        con.execute("COMMIT")
+        return {"status": "success", "message": f"Action {action} reversed"}
+
+    except Exception as e:
+        con.execute("ROLLBACK")
+        logger.error(f"Undo failed: {e}")
+        raise HTTPException(500, f"Undo failed: {str(e)}")
 
 
 app.include_router(v1)

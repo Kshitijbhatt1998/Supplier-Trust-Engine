@@ -154,6 +154,11 @@ _GRADE_NOISE    = re.compile(
     r"|\b(?:USP|NF|BP|EP|FCC|ACS|Reagent|Technical|Industrial|Commercial)\b",
     re.IGNORECASE,
 )
+# THE ROLE SHIELD: Strips common "Care Of" clusters to find the true manufacturer.
+_ROLE_NOISE = re.compile(
+    r"\b(?:C/O|C-O|CARE\s+OF|VIA|BY)\b.*$", 
+    re.IGNORECASE
+)
 
 
 # ------------------------------------------------------------------ #
@@ -209,31 +214,21 @@ class ChemicalNormalizer:
     def normalize(self, name: str) -> str:
         """
         Produce a canonical comparison form for a chemical name.
-
-        Pipeline:
-          1. Strip noise (parentheticals, purity %, grade labels, HS codes)
-          2. Expand abbreviations (PET → polyethylene terephthalate)
-          3. Casefold + ASCII transliteration
-          4. Remove residual punctuation
-          5. Collapse whitespace
-          NOTE: No token sorting — word order carries semantic meaning.
         """
         if not name:
             return ""
 
         text = name
 
-        # 1. Noise stripping (order matters: parens before percent)
+        # 1. Noise stripping (including Role Shield)
+        text = _ROLE_NOISE.sub(" ", text)
         text = _PARENS_NOISE.sub(" ", text)
         text = _PERCENT_NOISE.sub(" ", text)
         text = _HS_NOISE.sub(" ", text)
         text = _GRADE_NOISE.sub(" ", text)
-        # Strip inline CAS annotations so they don't corrupt the name tokens
         text = _CAS_PATTERN.sub(" ", text)
 
-        # 2. Abbreviation expansion (whole-word only, case-insensitive)
-        #    Process longest abbreviations first to avoid partial substitutions
-        #    (e.g. "PA66" before "PA").
+        # 2. Abbreviation expansion
         for abbr in sorted(self._abbrev, key=len, reverse=True):
             pattern = re.compile(r"\b" + re.escape(abbr) + r"\b", re.IGNORECASE)
             if pattern.search(text):
@@ -245,20 +240,17 @@ class ChemicalNormalizer:
 
         # 4. Remove residual punctuation (keep hyphens within compound names)
         text = re.sub(r"[^a-z0-9\s\-]", " ", text)
-
-        # 5. Collapse whitespace, strip leading/trailing
         text = re.sub(r"\s+", " ", text).strip()
 
         return text
 
-    def normalize_for_cas(self, name: str) -> tuple[Optional[str], str]:
+    def normalize_for_cas(self, name: str) -> tuple[Optional[str], str, bool]:
         """
         Attempt CAS extraction first; fall back to normalize().
-
-        Returns (cas_id, normalized_name):
-          - If CAS found: cas_id = "cas-NNNNNN-NN-N", normalized_name = cleaned text
-          - If no CAS:    cas_id = None,               normalized_name = normalize(name)
+        
+        Returns (cas_id, normalized_name, is_surrogate)
         """
+        is_surrogate = bool(_ROLE_NOISE.search(name))
         cas = self.extract_cas(name)
         normalized = self.normalize(name)
-        return (cas_to_canonical_id(cas) if cas else None, normalized)
+        return (cas_to_canonical_id(cas) if cas else None, normalized, is_surrogate)

@@ -124,12 +124,15 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
 
     con.execute("""
         CREATE TABLE IF NOT EXISTS admin_audit_log (
-            id           VARCHAR PRIMARY KEY,   -- uuid4 hex
-            action       VARCHAR NOT NULL,       -- 'verify' | 'reject'
-            alias_ids    VARCHAR NOT NULL,       -- JSON array of acted-on IDs
-            canonical_id VARCHAR,               -- canonical_id of first alias (for grouping)
-            reason_code  VARCHAR,
-            acted_at     TIMESTAMP DEFAULT NOW()
+            id                 VARCHAR PRIMARY KEY,   -- uuid4 hex
+            action             VARCHAR NOT NULL,       -- 'verify' | 'reject'
+            alias_ids          VARCHAR NOT NULL,       -- JSON array of acted-on IDs
+            canonical_id       VARCHAR,               -- canonical_id of first alias
+            reason_code        VARCHAR,
+            snapshot_json      VARCHAR,               -- SNAPSHOT: captures state for 'undo'
+            is_undone          BOOLEAN DEFAULT FALSE,
+            undo_reason        VARCHAR,
+            acted_at           TIMESTAMP DEFAULT NOW()
         );
     """)
 
@@ -139,6 +142,9 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
     # ALTER TABLE ADD COLUMN IF NOT EXISTS is idempotent in DuckDB 0.8+
     con.execute("ALTER TABLE suppliers      ADD COLUMN IF NOT EXISTS category VARCHAR DEFAULT 'textile'")
     con.execute("ALTER TABLE entity_aliases ADD COLUMN IF NOT EXISTS category VARCHAR DEFAULT 'textile'")
+    con.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS snapshot_json VARCHAR")
+    con.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS is_undone     BOOLEAN DEFAULT FALSE")
+    con.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS undo_reason   VARCHAR")
 
     # Indexes on hot query paths
     con.execute("CREATE INDEX IF NOT EXISTS idx_trust_score      ON trust_scores(trust_score)")
@@ -150,6 +156,7 @@ def init_db(path: Optional[str] = None) -> duckdb.DuckDBPyConnection:
     con.execute("CREATE INDEX IF NOT EXISTS idx_alias_canonical  ON entity_aliases(canonical_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_alias_category   ON entity_aliases(category)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_supplier_category ON suppliers(category)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_audit_acted_at    ON admin_audit_log(acted_at DESC)")
 
     # ---------------------------------------------------------------- #
     # resolver_config — Laplace-smoothed rejection rate per canonical.  #
