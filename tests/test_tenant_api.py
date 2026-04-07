@@ -24,6 +24,7 @@ os.environ["DB_PATH"] = ":memory:"
 
 from fastapi.testclient import TestClient  # noqa: E402
 import api.main  # noqa: E402
+from api.auth import hash_key  # noqa: E402
 from api.main import app  # noqa: E402
 
 ADMIN = {"X-Admin-Token": "dev-admin-pass-123"}
@@ -196,8 +197,7 @@ def test_deactivated_key_returns_403():
         tenant_id, raw_key = _provision_tenant(client, name="Active Tenant")
 
         # Deactivate the key directly
-        import hashlib
-        hashed = hashlib.sha256(raw_key.encode()).hexdigest()
+        hashed = hash_key(raw_key)
         api.main.con.execute(
             "UPDATE api_keys SET is_active = FALSE WHERE hashed_key = ?", [hashed]
         )

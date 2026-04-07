@@ -13,7 +13,6 @@ Auth model:
 import os
 import json
 import uuid
-import hashlib
 import secrets
 from enum import Enum
 from typing import Optional
@@ -35,7 +34,7 @@ from pipeline.storage.db import init_db
 from model.features import engineer_features, MODEL_FEATURES
 from model.scorer import score_supplier
 from api.decision_engine import DecisionEngine, ProcurementCriteria
-from api.auth import get_current_tenant, get_admin_key, Tenant
+from api.auth import get_current_tenant, get_admin_key, Tenant, hash_key
 from api.resolver import EntityResolver
 from api.chemical_normalizer import _ROLE_NOISE as _CHEM_ROLE_NOISE
 from fastapi import BackgroundTasks
@@ -810,7 +809,7 @@ def create_tenant_key(
         raise HTTPException(404, "Tenant not found")
 
     raw_key = f"dtv_{secrets.token_hex(24)}"
-    hashed = hashlib.sha256(raw_key.encode()).hexdigest()
+    hashed = hash_key(raw_key)
     prefix = raw_key[:8]
 
     con.execute("""

@@ -37,8 +37,8 @@ class Tenant(BaseModel):
 
 
 def hash_key(key: str) -> str:
-    """Hash an API key for comparison with database."""
-    return hashlib.sha256(key.encode()).hexdigest()
+    """Hash an API key for secure lookup without storing raw key material."""
+    return hashlib.sha3_256(key.encode()).hexdigest()
 
 
 async def get_current_tenant(
