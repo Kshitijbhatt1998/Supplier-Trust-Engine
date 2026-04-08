@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  dependency-graph: write
 
 jobs:
   test:
@@ -69,3 +70,18 @@ jobs:
         env:
           VITE_API_KEY: ci-placeholder
           VITE_ADMIN_TOKEN: ci-placeholder
+
+  submit-pypi:
+    name: Submit Python dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      dependency-graph: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Submit dependencies to GitHub
+        uses: github/dependency-submission-action@v4
+        with:
+          dependency-files: requirements.txt
+          snapshot-warning: false

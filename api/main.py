@@ -13,7 +13,6 @@ Auth model:
 import os
 import json
 import uuid
-import hashlib
 import secrets
 from enum import Enum
 from typing import Optional
@@ -62,7 +61,11 @@ if _sentry_dsn:
 # ------------------------------------------------------------------ #
 # Rate limiter                                                          #
 # ------------------------------------------------------------------ #
-limiter = Limiter(key_func=get_tenant_limit_key)
+# Disable request rate limiting in test mode to avoid shared TestClient
+# IP throttling across multiple test cases. Production behavior remains
+# unchanged.
+limiter_enabled = os.getenv("TESTING", "").lower() not in ("1", "true", "yes")
+limiter = Limiter(key_func=get_tenant_limit_key, enabled=limiter_enabled)
 
 
 # ------------------------------------------------------------------ #
@@ -895,7 +898,7 @@ def create_tenant_key(
         raise HTTPException(404, "Tenant not found")
 
     raw_key = f"dtv_{secrets.token_hex(24)}"
-    hashed = hashlib.sha256(raw_key.encode()).hexdigest()
+    hashed = hash_key(raw_key)
     prefix = raw_key[:8]
 
     con.execute("""

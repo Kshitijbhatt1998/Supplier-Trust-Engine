@@ -39,6 +39,9 @@ if not _admin_token:
 
 EXPECTED_ADMIN_TOKEN: str = _admin_token
 
+# Global KDF salt for API key hashing. Override via environment in production.
+API_KEY_KDF_SALT: bytes = os.getenv("API_KEY_KDF_SALT", "CHANGE_ME_API_KEY_KDF_SALT").encode()
+
 # Monthly call quotas per tier. None = unlimited.
 TIER_QUOTA: dict[str, int | None] = {
     "tier_1":     1_000,
@@ -92,8 +95,15 @@ class UserInDB(User):
 # ── Hashing & Tokens ────────────────────────────────────────────── #
 
 def hash_key(key: str) -> str:
-    """Hash an API key for comparison with database."""
-    return hashlib.sha256(key.encode()).hexdigest()
+    """Derive a hardened hash of an API key for lookup without storing raw key material."""
+    # Use a computationally expensive KDF (PBKDF2-HMAC-SHA256) instead of a single fast hash.
+    dk = hashlib.pbkdf2_hmac(
+        "sha256",
+        key.encode(),
+        API_KEY_KDF_SALT,
+        100_000,
+    )
+    return dk.hex()
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)

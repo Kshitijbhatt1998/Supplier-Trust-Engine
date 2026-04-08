@@ -1,8 +1,8 @@
 import duckdb
 import os
 import uuid
-import hashlib
 from dotenv import load_dotenv
+from api.auth import hash_key
 
 load_dotenv()
 
@@ -62,7 +62,7 @@ def seed_db():
         # Get API_KEY from .env
         raw_key = os.getenv("API_KEY")
         if raw_key:
-            hashed_key = hashlib.sha256(raw_key.encode()).hexdigest()
+            hashed_key = hash_key(raw_key)
             prefix = raw_key[:8]
             con.execute("""
                 INSERT INTO api_keys (hashed_key, tenant_id, prefix, is_active)
