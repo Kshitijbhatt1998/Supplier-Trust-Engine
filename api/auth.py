@@ -6,7 +6,7 @@ from pydantic import BaseModel, EmailStr, Field
 from fastapi import Security, HTTPException, Request, status
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+import jwt
 from passlib.context import CryptContext
 from dotenv import load_dotenv
 
@@ -161,7 +161,7 @@ async def get_current_user(
         email: str = payload.get("sub")
         if email is None:
             return None
-    except JWTError:
+    except (jwt.PyJWTError, Exception):
         return None
 
     con = request.app.state.db
