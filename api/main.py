@@ -965,6 +965,10 @@ class GRSVerifyRequest(BaseModel):
     supplier_id: Optional[str] = Field(None, max_length=100)
 
 
+class SubscribeRequest(BaseModel):
+    note: Optional[str] = Field(None, max_length=500)
+
+
 @v1.post("/suppliers/{supplier_id}/refresh", response_model=RefreshResponse)
 @limiter.limit("2/minute")
 async def refresh_supplier(
@@ -1048,6 +1052,54 @@ async def refresh_supplier(
         trust_score=new_score,
         message="Supplier data refreshed and re-scored successfully.",
     )
+
+
+@v1.post("/suppliers/{supplier_id}/subscribe")
+@limiter.limit("20/minute")
+def subscribe_supplier(
+    supplier_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    body: SubscribeRequest = SubscribeRequest(),
+    tenant: Tenant = Depends(get_current_tenant),
+):
+    """
+    Add a supplier to the calling tenant's watchlist.
+    Subsequent score drops will trigger webhook alerts for this tenant.
+    Idempotent — re-subscribing updates the note.
+    """
+    supplier_id = supplier_id[:100]
+    exists = con.execute("SELECT 1 FROM suppliers WHERE id = ?", [supplier_id]).fetchone()
+    if not exists:
+        raise HTTPException(404, f"Supplier not found: {supplier_id}")
+
+    con.execute("""
+        INSERT INTO tenant_watchlists (tenant_id, supplier_id, private_note, is_monitored, last_review_at)
+        VALUES (?, ?, ?, TRUE, NOW())
+        ON CONFLICT (tenant_id, supplier_id) DO UPDATE SET
+            private_note   = excluded.private_note,
+            is_monitored   = TRUE,
+            last_review_at = NOW()
+    """, [tenant.id, supplier_id, body.note])
+
+    background_tasks.add_task(log_usage, tenant.id, f"/v1/suppliers/{supplier_id}/subscribe", "POST", 200)
+    return {"status": "subscribed", "tenant_id": tenant.id, "supplier_id": supplier_id}
+
+
+@v1.delete("/suppliers/{supplier_id}/subscribe")
+@limiter.limit("20/minute")
+def unsubscribe_supplier(
+    supplier_id: str,
+    request: Request,
+    tenant: Tenant = Depends(get_current_tenant),
+):
+    """Remove a supplier from the calling tenant's watchlist."""
+    supplier_id = supplier_id[:100]
+    con.execute("""
+        UPDATE tenant_watchlists SET is_monitored = FALSE
+        WHERE tenant_id = ? AND supplier_id = ?
+    """, [tenant.id, supplier_id])
+    return {"status": "unsubscribed", "tenant_id": tenant.id, "supplier_id": supplier_id}
 
 
 @v1.post("/verify/grs")

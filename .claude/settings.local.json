@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d/Project ideas/sourceguard-cli/**)",
+      "Bash(pip install:*)",
+      "Bash(sourceguard --version)"
+    ]
+  }
+}
