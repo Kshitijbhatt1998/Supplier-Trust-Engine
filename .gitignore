@@ -55,3 +55,6 @@ llvmlite.dll
 
 # Nested repo — old project root, not a real submodule
 Supplier-Trust-Engine/
+
+# Claude state
+.claude/
