@@ -7,6 +7,7 @@ import SupplierModal from './components/SupplierModal';
 import AdminDashboard from './components/AdminDashboard';
 import TenantDashboard from './components/TenantDashboard';
 import Login from './components/Login';
+import CookieConsent from './components/CookieConsent';
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
@@ -205,6 +206,7 @@ export default function App() {
           onClose={() => setSelectedSupplier(null)}
         />
       )}
+      <CookieConsent />
     </div>
   );
 }
