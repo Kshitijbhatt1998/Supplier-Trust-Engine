@@ -150,23 +150,19 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 
 async def get_current_user(
     request: Request,
-    token: str = Security(oauth2_scheme)
-) -> User:
+    token: Optional[str] = Security(oauth2_scheme)
+) -> Optional[User]:
     """Validate JWT and return the user from the database."""
     if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return None
     
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
+            return None
     except JWTError:
-        raise HTTPException(status_code=401, detail="Could not validate credentials")
+        return None
 
     con = request.app.state.db
     row = con.execute("""
