@@ -247,24 +247,58 @@ class ImportYetiScraper:
         """
         logger.info(f"🚀 Real-time trigger for: {name}")
         search_url = f"{self.BASE_URL}/search?q={name}&type=supplier"
-        
+
         try:
             await page.goto(search_url, wait_until="networkidle")
             await asyncio.sleep(random_delay(1, 2))
-            
+
             # Click the first relative company link
             # Selector should be robust enough to pick the primary result
             first_result = await page.query_selector("a[href^='/company/']")
             if not first_result:
                 logger.warning(f"No results found for {name}")
                 return None
-                
+
             path = await first_result.get_attribute("href")
             return await self._scrape_supplier(page, path)
-            
+
         except Exception as e:
             logger.error(f"Failed to trigger on-demand scrape for {name}: {e}")
             return None
+
+    async def scrape_single_company(self, company_path: str) -> Optional[dict]:
+        """
+        Scrape a single known ImportYeti company path (e.g. '/company/xyz-textiles').
+        Opens a fresh browser session — designed for on-demand API refresh calls.
+        Returns a structured supplier dict or None on failure.
+        """
+        logger.info(f"🔄 On-demand scrape for path: {company_path}")
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=self.headless,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+            )
+            page = await context.new_page()
+
+            # Reuse existing session if available
+            session_loaded = await self._load_session(context)
+            if not session_loaded:
+                await self._login(page)
+                await self._save_session(context)
+
+            try:
+                data = await self._scrape_supplier(page, company_path)
+                return data
+            finally:
+                await browser.close()
 
     # ------------------------------------------------------------------ #
     # Main orchestration                                                    #

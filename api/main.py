@@ -38,9 +38,9 @@ from model.features import engineer_features, MODEL_FEATURES
 from model.scorer import score_supplier
 from api.decision_engine import DecisionEngine, ProcurementCriteria
 from api.auth import (
-    get_current_tenant, get_admin_key, get_current_user, 
-    verify_password, create_access_token, Tenant, User, 
-    ACCESS_TOKEN_EXPIRE_MINUTES, get_tenant_limit_key
+    get_current_tenant, get_admin_key, get_current_user,
+    verify_password, create_access_token, hash_key, Tenant, User,
+    ACCESS_TOKEN_EXPIRE_MINUTES, get_tenant_limit_key, get_tier_rate_limit,
 )
 from api.resolver import EntityResolver
 from api.chemical_normalizer import _ROLE_NOISE as _CHEM_ROLE_NOISE
@@ -258,28 +258,6 @@ def log_usage(tenant_id: str, endpoint: str, method: str, status_code: int):
         logger.error(f"Failed to log usage for {tenant_id}: {e}")
 
 
-# ── Marketplace Ecosystem ───────────────────────────────────── #
-
-@v1.post("/integrations/shopify/sync")
-async def sync_shopify(
-    shop_url: str,
-    access_token: str,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Mock Shopify Sync: Iterates through product vendors and 
-    attaches trust scores to their metadata.
-    """
-    logger.info(f"🛒 Initiating Shopify sync for {shop_url}...")
-    
-    # In reality, this would use the Shopify REST/GraphQL API
-    # 1. Fetch products -> extract 'vendor'
-    # 2. Match vendor to our suppliers
-    # 3. Update product metafields/tags with trust score
-    
-    return {"status": "success", "synced_vendors": 12, "shop": shop_url}
-
-
 def _score_supplier_by_request(req: ScoreRequest) -> TrustScoreResponse:
     if not req.supplier_id and not req.supplier_name:
         raise HTTPException(400, "Provide supplier_id or supplier_name")
@@ -494,7 +472,7 @@ def get_supplier(
 # ── Protected POST endpoints (X-API-Key required) ────────────────── #
 
 @v1.post("/score", response_model=TrustScoreResponse)
-@limiter.limit("10/minute")
+@limiter.limit(get_tier_rate_limit)
 def score(
     req: ScoreRequest, 
     request: Request, 
@@ -508,7 +486,7 @@ def score(
 
 
 @v1.post("/procure/evaluate")
-@limiter.limit("5/minute")
+@limiter.limit(get_tier_rate_limit)
 def procure_evaluate(
     req: ProcureRequest, 
     request: Request, 
@@ -569,7 +547,7 @@ def procure_evaluate(
 
 
 @v1.post("/resolver/feedback")
-@limiter.limit("20/minute")
+@limiter.limit(get_tier_rate_limit)
 def resolver_feedback(
     req: FeedbackRequest, 
     request: Request, 
@@ -950,6 +928,168 @@ def get_usage_analytics(request: Request, key: str = Depends(get_admin_key)):
             "tenant_name": r[0], "endpoint": r[1], "calls": r[2], "last_call": r[3].isoformat()
         } for r in rows
     ]
+
+
+# ── Real-Time Ingestion Endpoints ────────────────────────────── #
+
+class RefreshResponse(BaseModel):
+    supplier_id:   str
+    supplier_name: str
+    status:        str
+    trust_score:   Optional[float] = None
+    message:       str
+
+
+class GRSVerifyRequest(BaseModel):
+    cert_number: str = Field(..., min_length=3, max_length=100)
+    supplier_id: Optional[str] = Field(None, max_length=100)
+
+
+@v1.post("/suppliers/{supplier_id}/refresh", response_model=RefreshResponse)
+@limiter.limit("2/minute")
+async def refresh_supplier(
+    supplier_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    tenant: Tenant = Depends(get_current_tenant),
+):
+    """
+    Trigger an on-demand re-scrape for a single supplier.
+    Uses the stored raw_url to rebuild fresh shipment and trade data,
+    then re-scores and updates the trust score in DuckDB.
+    """
+    from pipeline.spiders.importyeti_scraper import ImportYetiScraper
+    from pipeline.entity_resolution import resolve_and_upsert
+    from model.scorer import score_supplier as _score, score_all_and_store
+
+    supplier_id = supplier_id[:100]
+    row = con.execute(
+        "SELECT id, name, raw_url, category FROM suppliers WHERE id = ?", [supplier_id]
+    ).fetchone()
+    if not row:
+        raise HTTPException(404, f"Supplier not found: {supplier_id}")
+
+    sup_id, sup_name, raw_url, category = row
+
+    if not raw_url or "/company/" not in raw_url:
+        raise HTTPException(
+            400,
+            "Supplier has no ImportYeti URL on record — cannot trigger re-scrape.",
+        )
+
+    # Extract the path component from the stored URL
+    from urllib.parse import urlparse
+    company_path = urlparse(raw_url).path  # e.g. '/company/xyz-textiles'
+
+    scraper = ImportYetiScraper()
+    data = await scraper.scrape_single_company(company_path)
+
+    if not data:
+        background_tasks.add_task(log_usage, tenant.id, f"/v1/suppliers/{supplier_id}/refresh", "POST", 502)
+        return RefreshResponse(
+            supplier_id=sup_id,
+            supplier_name=sup_name,
+            status="failed",
+            message="Scraper returned no data — site may be down or selector changed.",
+        )
+
+    resolve_and_upsert(con, data)
+
+    # Re-score the supplier immediately
+    from model.features import engineer_features
+    features_df = engineer_features(con)
+    feat_row = features_df[features_df["id"] == sup_id]
+    new_score = None
+    if not feat_row.empty:
+        result = _score(feat_row.iloc[0].to_dict(), category or "textile")
+        new_score = result["trust_score"]
+        con.execute("""
+            INSERT INTO trust_scores (supplier_id, trust_score, risk_label, feature_json, shap_flags_json)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (supplier_id) DO UPDATE SET
+                trust_score = excluded.trust_score,
+                risk_label  = excluded.risk_label,
+                feature_json = excluded.feature_json,
+                shap_flags_json = excluded.shap_flags_json,
+                scored_at = NOW()
+        """, [
+            sup_id,
+            new_score,
+            1 if result["risk_probability"] > 0.5 else 0,
+            json.dumps(result["feature_snapshot"]),
+            json.dumps(result["risk_flags"]),
+        ])
+
+    background_tasks.add_task(log_usage, tenant.id, f"/v1/suppliers/{supplier_id}/refresh", "POST", 200)
+    return RefreshResponse(
+        supplier_id=sup_id,
+        supplier_name=sup_name,
+        status="refreshed",
+        trust_score=new_score,
+        message="Supplier data refreshed and re-scored successfully.",
+    )
+
+
+@v1.post("/verify/grs")
+@limiter.limit("5/minute")
+async def verify_grs(
+    req: GRSVerifyRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    tenant: Tenant = Depends(get_current_tenant),
+):
+    """
+    Trigger a real-time GRS certificate verification via Playwright.
+    Optionally links the result to an existing supplier record.
+    """
+    from pipeline.verifiers.grs_verifier import GRSVerifier
+
+    verifier = GRSVerifier(headless=True)
+    result = await verifier.verify_certificate(req.cert_number)
+
+    # Persist the result if a supplier_id was provided
+    if req.supplier_id:
+        supplier_id = req.supplier_id[:100]
+        exists = con.execute("SELECT 1 FROM suppliers WHERE id = ?", [supplier_id]).fetchone()
+        if exists:
+            cert_id = f"{supplier_id}:grs:{req.cert_number}"
+            con.execute("""
+                INSERT INTO certifications (id, supplier_id, license_id, source, status, certificate_name)
+                VALUES (?, ?, ?, 'grs', ?, 'Global Recycled Standard')
+                ON CONFLICT (id) DO UPDATE SET
+                    status = excluded.status,
+                    verified_at = NOW()
+            """, [cert_id, supplier_id, req.cert_number, result.get("status", "unknown")])
+
+    background_tasks.add_task(log_usage, tenant.id, "/v1/verify/grs", "POST", 200)
+    return {
+        "cert_number": req.cert_number,
+        "status":      result.get("status", "unknown"),
+        "source":      result.get("source", "Textile Exchange Integrity Database"),
+        "verified_at": result.get("verified_at"),
+        "supplier_id": req.supplier_id,
+    }
+
+
+# ── Marketplace Ecosystem ───────────────────────────────────── #
+
+@v1.post("/integrations/shopify/sync")
+@limiter.limit("5/minute")
+async def sync_shopify(
+    shop_url: str,
+    request: Request,
+    access_token: str = "",
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Mock Shopify Sync: Iterates through product vendors and
+    attaches trust scores to their metadata.
+    """
+    logger.info(f"Initiating Shopify sync for {shop_url}...")
+    from api.plugins.shopify_connector import ShopifyConnector
+    connector = ShopifyConnector(shop_url=shop_url, access_token=access_token, db=con)
+    result = connector.sync_vendors()
+    return result
 
 
 app.include_router(v1)
