@@ -392,8 +392,14 @@ async def login(
 
 @v1.get("/auth/me", response_model=User)
 @limiter.limit("30/minute")
-async def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(request: Request, current_user: User = Depends(get_current_user)):
     """ Return the current logged-in user profile. """
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return current_user
 
 
@@ -1099,6 +1105,8 @@ async def sync_shopify(
     Mock Shopify Sync: Iterates through product vendors and
     attaches trust scores to their metadata.
     """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     logger.info(f"Initiating Shopify sync for {shop_url}...")
     from api.plugins.shopify_connector import ShopifyConnector
     connector = ShopifyConnector(shop_url=shop_url, access_token=access_token, db=con)
