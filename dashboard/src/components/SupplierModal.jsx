@@ -3,9 +3,10 @@ import { api } from '../api'
 import { scoreColor } from '../utils'
 
 export default function SupplierModal({ supplierId, supplierName, onClose }) {
-  const [data, setData] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [data, setData]           = useState(null)
+  const [loading, setLoading]     = useState(true)
+  const [error, setError]         = useState(null)
+  const [downloading, setDownloading] = useState(false)
 
   useEffect(() => {
     if (!supplierId && !supplierName) return;
@@ -34,6 +35,25 @@ export default function SupplierModal({ supplierId, supplierName, onClose }) {
     <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="modal">
         <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>
+        {data && (
+          <button
+            onClick={async () => {
+              setDownloading(true)
+              try { await api.downloadReport(data.supplier_id) }
+              catch (e) { alert('PDF download failed: ' + e.message) }
+              finally { setDownloading(false) }
+            }}
+            disabled={downloading}
+            style={{
+              position: 'absolute', top: 16, right: 48,
+              padding: '5px 12px', background: 'rgba(99,102,241,0.15)',
+              border: '1px solid #6366f1', color: '#a5b4fc',
+              borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600,
+            }}
+          >
+            {downloading ? 'Generating…' : '⬇ PDF Report'}
+          </button>
+        )}
 
         {loading && (
           <div className="flex-center" style={{ padding: '60px 0' }}>

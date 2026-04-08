@@ -24,7 +24,7 @@ import sentry_sdk
 from fastapi import FastAPI, HTTPException, Depends, Request, Query, status, BackgroundTasks
 from playwright.async_api import async_playwright
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRouter
 from pydantic import BaseModel, Field, field_validator, EmailStr
 from loguru import logger
@@ -467,6 +467,20 @@ def get_supplier(
 ):
     """Full trust profile for a single supplier."""
     return _score_supplier_by_request(ScoreRequest(supplier_id=supplier_id[:100]))
+
+
+# ── Anonymous demo endpoint (no key — 3 searches/IP/day) ─────────── #
+
+@v1.post("/demo/score", response_model=TrustScoreResponse)
+@limiter.limit("3/day")
+def demo_score(req: ScoreRequest, request: Request):
+    """
+    Public demo endpoint — no API key required.
+    Capped at 3 requests per IP per day.
+    Returns the same payload as /v1/score so the frontend can
+    swap URLs transparently once the user signs up.
+    """
+    return _score_supplier_by_request(req)
 
 
 # ── Protected POST endpoints (X-API-Key required) ────────────────── #
@@ -1090,6 +1104,54 @@ async def sync_shopify(
     connector = ShopifyConnector(shop_url=shop_url, access_token=access_token, db=con)
     result = connector.sync_vendors()
     return result
+
+
+# ── PDF Due Diligence Report ─────────────────────────────────── #
+
+@v1.get("/suppliers/{supplier_id}/report")
+@limiter.limit("10/minute")
+def download_report(
+    supplier_id: str,
+    request: Request,
+    tenant: Tenant = Depends(get_current_tenant),
+):
+    """
+    Generate and stream a PDF due diligence report for a supplier.
+    Requires X-API-Key. Returns application/pdf.
+    """
+    from api.pdf_report import generate_report
+    from model.scorer import score_supplier as _score
+    from model.features import engineer_features
+
+    supplier_id = supplier_id[:100]
+
+    row = con.execute("SELECT * FROM suppliers WHERE id = ?", [supplier_id]).fetchone()
+    if not row:
+        raise HTTPException(404, f"Supplier not found: {supplier_id}")
+
+    cols     = [d[0] for d in con.description]
+    supplier = dict(zip(cols, row))
+
+    features_df = engineer_features(con)
+    feat_row    = features_df[features_df["id"] == supplier_id]
+    if feat_row.empty:
+        raise HTTPException(500, "Could not engineer features for this supplier")
+
+    score_data = _score(feat_row.iloc[0].to_dict(), supplier.get("category", "textile"))
+
+    certs = con.execute(
+        "SELECT source, status, valid_until FROM certifications WHERE supplier_id = ?",
+        [supplier_id],
+    ).fetchall()
+
+    pdf_bytes = generate_report(supplier, score_data, certs)
+    filename  = f"sourceguard_{supplier_id}_{request.query_params.get('date', 'report')}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 app.include_router(v1)
