@@ -90,86 +90,50 @@ Data License              Custom     → Bulk trust scores for platforms (Tier 1
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        DATA SOURCES                         │
-│                                                             │
-│  ImportYeti ──► US Customs manifests (shipment history)     │
-│  OEKO-TEX   ──► Certification portal (label check API)      │
-│  GOTS       ──► Certified facilities database              ┌─────────────────────────────────────────────────────────────┐
-│                        DATA SOURCES                         │
-│                                                             │
-│  ImportYeti ──► US manifests (shipment history)             │
-│  Textile Ex ──► GRS Certification portal (real-time check)  │
-│  OEKO-TEX   ──► Certification portal (label check API)      │
-│  GOTS       ──► Certified facilities database               │
-│  UN Comtrade──► National trade stats (export volumes)       │
-└──────────────────────────┬──────────────────────────────────┘
-                           │  Playwright Scrapers / Verifiers
-                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                    DuckDB  (local/volume)                    │
-│  suppliers │ certifications │ shipments │ trust_scores       │
-│  users │ tenants │ api_keys │ usage_logs │ webhooks          │
-│  supplier_score_history │ tenant_watchlists                  │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-              ┌────────────┴────────────┐
-              ▼                         ▼
-      Feature Engineering         Entity Resolution
-      (Textile & Chemical)        (Adaptive Fuzzy + CAS +
-                                   Role Shield)
-              │                         │
-              └────────────┬────────────┘
-                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│             LightGBM Multi-Vertical Scoring                 │
-│  - Textile Classifier (risk probability)                    │
-│  - Chemical Regressor (trust score prediction)              │
-│  - Output: 0–100 Score + SHAP Risk Flags                   │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│          FastAPI  /v1/  (RBAC + Tiered Rate Limits)         │
-│                                                             │
-│  [AUTH]   /auth/login        JWT Session Issuance           │
-│  [CORE]   /score             Score by name/ID               │
-│  [CORE]   /procure/evaluate  AI Decision Engine             │
-│  [REAL]   /suppliers/{id}/refresh  On-demand scraping       │
-│  [REAL]   /verify/grs        Textile Exchange Verification  │
-│  [ALERTS] /webhooks/subscribe  Score drop notifications     │
-│  [SYNC]   /integrations/shopify/sync  E-commerce sync       │
-│  [ADMIN]  /admin/review-queue  Alias review board           │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-               ┌───────────┴────────────┐
-               ▼                        ▼
-        React Dashboard          AI Procurement Agent
-        (RBAC Protected)         (Scoped API Keys)
-�────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│          FastAPI  /v1/  (rate-limited, API-key auth)        │
-│                                                             │
-│  GET  /v1/health              Healthcheck                   │
-│  GET  /v1/stats               Dashboard aggregate counts    │
-│  GET  /v1/suppliers           Filtered supplier list        │
-│  GET  /v1/supplier/{id}       Full trust profile            │
-│  POST /v1/score               Score by name or ID           │
-│  POST /v1/procure/evaluate    AI Decision Engine            │
-│  POST /v1/resolver/feedback   Human-in-the-loop feedback    │
-│  GET  /v1/admin/review-queue  Admin alias review queue      │
-│  POST /v1/admin/alias/action  Bulk verify / reject aliases  │
-│  GET  /v1/admin/audit-logs    Action history feed           │
-│  POST /v1/admin/audit/undo    Snapshot-based reversal       │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-               ┌───────────┴────────────┐
-               ▼                        ▼
-        React Dashboard          AI Procurement Agent
-        (nginx, port 80)         (any LLM / agentic system)
+```mermaid
+flowchart TD
+    subgraph Sources["Data Sources"]
+        IY[ImportYeti\nUS Customs Manifests]
+        TE[Textile Exchange\nGRS Certificates]
+        OT[OEKO-TEX / GOTS\nCertification Portals]
+        CT[UN Comtrade\nNational Trade Stats]
+    end
+
+    subgraph Ingest["Ingestion Layer (Playwright)"]
+        SC[ImportYeti Scraper\nscrape_single_company]
+        CV[Certification Verifiers\nGRS · GOTS · OEKO-TEX]
+    end
+
+    subgraph Store["DuckDB Storage"]
+        DB[(suppliers · certifications\ntrust_scores · webhooks\ntenant_watchlists · usage_logs)]
+    end
+
+    subgraph ML["ML Pipeline"]
+        FE[Feature Engineering\nTextile 17 signals\nChemical 6 signals]
+        ER[Entity Resolution\nFuzzy + CAS exact\nRole Shield]
+        LG[LightGBM Scoring\nTextile Classifier\nChemical Regressor]
+        SH[SHAP Explainer\nHuman-readable Risk Flags]
+    end
+
+    subgraph API["FastAPI /v1/ — RBAC + Tiered Rate Limits"]
+        S[POST /score]
+        PE[POST /procure/evaluate]
+        RF[POST /suppliers/id/refresh]
+        GRS[POST /verify/grs]
+        SUB[POST /suppliers/id/subscribe]
+        WH[Webhook Worker\nHMAC-signed alerts]
+    end
+
+    subgraph Consumers["Consumers"]
+        DASH[React Dashboard\nRBAC · Tenant Mgmt · PDF Reports]
+        MCP[MCP Server\nClaude · GPT · LangChain]
+        SHO[Shopify Plugin\nVendor Trust Sync]
+    end
+
+    Sources --> Ingest --> Store
+    Store --> FE & ER --> LG --> SH --> API
+    API --> Consumers
+    SUB --> WH
 ```
 
 ---

@@ -168,6 +168,37 @@ def score_all_and_store() -> None:
 
 import uuid
 
+def _fire_score_drop_alerts(con, supplier_id: str, supplier_name: str, old_score: float, new_score: float):
+    """
+    Find all tenants watching this supplier and deliver a score_drop webhook.
+    Runs synchronously inside the batch scorer (no event loop required).
+    """
+    import asyncio
+    from api.webhook_worker import deliver_alerts
+
+    tenants = con.execute("""
+        SELECT tenant_id FROM tenant_watchlists
+        WHERE supplier_id = ? AND is_monitored = TRUE
+    """, [supplier_id]).fetchall()
+
+    if not tenants:
+        return
+
+    payload = {
+        "supplier_id":   supplier_id,
+        "supplier_name": supplier_name,
+        "old_score":     old_score,
+        "new_score":     new_score,
+        "drop":          round(old_score - new_score, 1),
+    }
+
+    for (tenant_id,) in tenants:
+        try:
+            asyncio.run(deliver_alerts(tenant_id, "score_drop", payload, con))
+        except Exception as e:
+            logger.error(f"Webhook delivery failed for tenant {tenant_id}: {e}")
+
+
 def _process_df(con, df, category):
     for _, row in df.iterrows():
         try:
@@ -209,10 +240,10 @@ def _process_df(con, df, category):
                     "re-score_batch"
                 ])
                 
-                # Check for "Score Drop" trigger for webhooks
+                # Trigger webhook alerts for subscribed tenants on significant score drop
                 if new_score < old_score - 5.0:
-                    logger.warning(f"  🔔 ALERT: Significant score drop for {row['name']} ({old_score} -> {new_score})")
-                    # TODO: Trigger webhook_worker.deliver_alerts()
+                    logger.warning(f"ALERT: Score drop for {row['name']} ({old_score} -> {new_score})")
+                    _fire_score_drop_alerts(con, row["id"], row["name"], old_score, new_score)
 
             logger.success(f"  [{category.upper()}] {row['name']}: {new_score}/100")
         except Exception as e:
