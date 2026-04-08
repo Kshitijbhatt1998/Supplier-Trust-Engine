@@ -94,7 +94,23 @@ export const api = {
     const qs = new URLSearchParams(params).toString()
     return request(`/suppliers${qs ? '?' + qs : ''}`)
   },
-  score:     (body)         => request('/score',            { method: 'POST', body: JSON.stringify(body) }),
+  score:          (body) => request('/score',            { method: 'POST', body: JSON.stringify(body) }),
+  downloadReport: async (supplierId) => {
+    const token  = localStorage.getItem('token')
+    const apiKey = import.meta.env.VITE_API_KEY
+    const headers = token
+      ? { Authorization: `Bearer ${token}` }
+      : apiKey ? { 'X-API-Key': apiKey } : {}
+    const res = await fetch(`${BASE}/suppliers/${encodeURIComponent(supplierId)}/report`, { headers })
+    if (!res.ok) throw new Error(`Report error ${res.status}`)
+    const blob = await res.blob()
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `sourceguard_${supplierId}.pdf`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
   procure:   (body)         => request('/procure/evaluate', { method: 'POST', body: JSON.stringify(body) }),
   feedback:  (body)         => request('/resolver/feedback', { method: 'POST', body: JSON.stringify(body) }),
 
@@ -118,8 +134,12 @@ export const api = {
       body: JSON.stringify(body),
     }),
     
-  // Tenant Management
-  listTenants: () => request('/admin/tenants'),
-  createTenant: (body) => request('/admin/tenants', { method: 'POST', body: JSON.stringify(body) }),
-  getUsage: () => request('/admin/usage'),
+  // Demo (no key required)
+  demoScore: (body) => request('/demo/score', { method: 'POST', body: JSON.stringify(body) }),
+
+  // Tenant Management (admin only)
+  listTenants:     ()           => request('/admin/tenants'),
+  createTenant:    (body)       => request('/admin/tenants', { method: 'POST', body: JSON.stringify(body) }),
+  createTenantKey: (tenantId)   => request(`/admin/tenants/${tenantId}/keys`, { method: 'POST' }),
+  getUsage:        ()           => request('/admin/usage'),
 }

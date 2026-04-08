@@ -5,7 +5,7 @@ import SupplierTable from './components/SupplierTable';
 import ProcurementSimulator from './components/ProcurementSimulator';
 import SupplierModal from './components/SupplierModal';
 import AdminDashboard from './components/AdminDashboard';
-
+import TenantDashboard from './components/TenantDashboard';
 import Login from './components/Login';
 
 export default function App() {
@@ -68,20 +68,27 @@ export default function App() {
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <h1>DATA VIBE</h1>
-          <p>Scoring Engine v0.2.0</p>
+          <h1>SOURCEGUARD</h1>
+          <p>Trust Engine v2.0.0</p>
         </div>
         <nav className="sidebar-nav">
           <button className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>
             📊 Dashboard
           </button>
           <button className={`nav-item ${activeTab === 'procure' ? 'active' : ''}`} onClick={() => setActiveTab('procure')}>
-            ⚡ API Decision Layer
+            ⚡ AI Decision Layer
           </button>
           <div className="nav-spacer" style={{ margin: '12px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }} />
-          <button className={`nav-item ${activeTab === 'admin' ? 'active' : ''}`} onClick={() => setActiveTab('admin')}>
-            🛡 Admin Control
-          </button>
+          {user?.role === 'admin' && (
+            <>
+              <button className={`nav-item ${activeTab === 'tenants' ? 'active' : ''}`} onClick={() => setActiveTab('tenants')}>
+                🏢 Tenants & Keys
+              </button>
+              <button className={`nav-item ${activeTab === 'admin' ? 'active' : ''}`} onClick={() => setActiveTab('admin')}>
+                🛡 Admin Control
+              </button>
+            </>
+          )}
         </nav>
         <div className="sidebar-footer">
           {user && (
@@ -167,6 +174,18 @@ export default function App() {
             <ProcurementSimulator />
           </>
         )}
+        {activeTab === 'tenants' && (
+          <>
+            <header className="page-header">
+              <div>
+                <h2>Tenant Management</h2>
+                <p>API keys, tier quotas, and usage analytics</p>
+              </div>
+            </header>
+            <TenantDashboard />
+          </>
+        )}
+
         {activeTab === 'admin' && (
           <>
             <header className="page-header">
