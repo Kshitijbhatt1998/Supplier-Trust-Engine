@@ -147,7 +147,7 @@ Data License              Custom     → Bulk trust scores for platforms (Tier 1
                ▼                        ▼
         React Dashboard          AI Procurement Agent
         (RBAC Protected)         (Scoped API Keys)
-�────┘
+�────┘
                            │
                            ▼
 ┌──────────────────────────────────────────────────────────────┐
@@ -247,27 +247,35 @@ Every score includes plain-English explanations of *why* a supplier scored the w
 Supplier-Trust-Engine/
 ├── api/
 │   ├── main.py                   # FastAPI app — all /v1/ endpoints + security middleware
-│   ├── auth.py                   # X-API-Key + X-Admin-Token header validation
+│   ├── auth.py                   # JWT + API-key auth, tiered rate-limit callable
 │   ├── resolver.py               # EntityResolver — adaptive fuzzy + CAS exact match
 │   ├── chemical_normalizer.py    # CAS extraction, abbreviation expansion, Role Shield
-│   └── decision_engine.py        # AI procurement decision engine
+│   ├── decision_engine.py        # AI procurement decision engine
+│   ├── webhook_worker.py         # Async HMAC-signed webhook delivery
+│   └── plugins/
+│       └── shopify_connector.py  # Shopify vendor sync plugin (mockup)
 ├── pipeline/
 │   ├── spiders/
-│   │   └── importyeti_scraper.py # Playwright-based ImportYeti scraper
+│   │   └── importyeti_scraper.py # Playwright scraper + scrape_single_company trigger
 │   ├── verifiers/
-│   │   └── certification_verifier.py  # OEKO-TEX + GOTS async verifier
+│   │   ├── certification_verifier.py  # OEKO-TEX + GOTS async verifier
+│   │   └── grs_verifier.py            # GRS real-time Playwright verifier
 │   ├── ingest/
 │   │   ├── comtrade_client.py    # UN Comtrade trade stats ingestion
 │   │   └── manifest_scraper.py   # Bill of lading manifest verification
 │   ├── ingest_polymers.py        # Chemical/polymer seed data + Role Shield priming
 │   ├── entity_resolution.py      # resolve_and_upsert helper for scraper output
 │   └── storage/
-│       └── db.py                 # DuckDB schema, migrations, views, upsert helpers
+│       └── db.py                 # DuckDB schema — all tables, migrations, views
 ├── model/
-│   ├── features.py               # Feature engineering (17 signals, textile only)
-│   ├── scorer.py                 # LightGBM training + SHAP scoring
-│   ├── trust_model.pkl           # Trained model artifact
-│   └── shap_explainer.pkl        # SHAP TreeExplainer artifact
+│   ├── features.py               # Textile feature engineering (17 signals)
+│   ├── features_chemical.py      # Chemical feature engineering (CAS, purity, regulatory)
+│   ├── train_chemical.py         # Chemical LightGBM regressor training script
+│   ├── scorer.py                 # Multi-category scoring + SHAP + history logging
+│   ├── trust_model.pkl           # Trained textile model artifact
+│   ├── shap_explainer.pkl        # Textile SHAP TreeExplainer
+│   ├── chemical_trust_model.pkl  # Trained chemical model artifact
+│   └── chemical_shap_explainer.pkl  # Chemical SHAP TreeExplainer
 ├── dashboard/
 │   ├── src/
 │   │   ├── App.jsx               # Main dashboard shell
@@ -295,6 +303,7 @@ Supplier-Trust-Engine/
 ├── docker-compose.yml            # Two-service stack (api + dashboard)
 ├── entrypoint.sh                 # Auto-seeds + trains on first boot
 ├── run_pipeline.py               # CLI orchestrator for all pipeline steps
+├── WALKTHROUGH.md                # V2 feature walkthrough and demo script
 └── requirements.txt
 ```
 
@@ -302,21 +311,48 @@ Supplier-Trust-Engine/
 
 ## API Reference
 
-All endpoints are under `/v1/`.
+All endpoints are under `/v1/`. Rate limits are tier-aware for `X-API-Key` routes.
 
-| Endpoint | Auth | Description |
+### Public / Dashboard
+
+| Endpoint | Rate Limit | Description |
 |:---|:---|:---|
-| `GET /v1/health` | None | Healthcheck |
-| `GET /v1/stats` | None | Dashboard aggregate counts |
-| `GET /v1/suppliers` | None | Filtered supplier list (5/min) |
-| `GET /v1/supplier/{id}` | None | Full trust profile |
-| `POST /v1/score` | `X-API-Key` | Score by name or ID |
-| `POST /v1/procure/evaluate` | `X-API-Key` | AI Decision Engine |
-| `POST /v1/resolver/feedback` | `X-API-Key` | Confirm / reject a resolution |
-| `GET /v1/admin/review-queue` | `X-Admin-Token` | Prioritised alias review queue |
-| `POST /v1/admin/alias/action` | `X-Admin-Token` | Bulk verify or reject aliases |
-| `GET /v1/admin/audit-logs` | `X-Admin-Token` | Recent action history |
-| `POST /v1/admin/audit/undo` | `X-Admin-Token` | Snapshot-based undo (24 h window) |
+| `GET /v1/health` | 60/min | Healthcheck |
+| `GET /v1/stats` | 60/min | Dashboard aggregate counts |
+| `GET /v1/suppliers` | 5/min | Filtered supplier list |
+| `GET /v1/supplier/{id}` | 30/min | Full trust profile |
+
+### Tenant API (X-API-Key required)
+
+| Endpoint | Rate Limit | Description |
+|:---|:---|:---|
+| `POST /v1/score` | tier-based | Score supplier by name or ID |
+| `POST /v1/procure/evaluate` | tier-based | AI procurement decision engine |
+| `POST /v1/resolver/feedback` | tier-based | Confirm or reject a name resolution |
+| `POST /v1/suppliers/{id}/refresh` | 2/min | On-demand re-scrape + re-score |
+| `POST /v1/verify/grs` | 5/min | Real-time GRS certificate check |
+| `POST /v1/integrations/shopify/sync` | 5/min | Sync vendor trust scores to Shopify |
+
+Tier rate limits (requests per minute):
+
+| Tier | RPM |
+|:---|:---|
+| tier_1 | 20 |
+| tier_2 | 100 |
+| enterprise | 1000 |
+
+### Admin (X-Admin-Token or JWT admin role)
+
+| Endpoint | Description |
+|:---|:---|
+| `GET /v1/admin/review-queue` | Prioritised alias review queue |
+| `POST /v1/admin/alias/action` | Bulk verify or reject aliases |
+| `GET /v1/admin/audit-logs` | Recent action history |
+| `POST /v1/admin/audit/undo` | Snapshot-based undo (24 h window) |
+| `POST /v1/admin/tenants` | Create a new tenant |
+| `POST /v1/admin/tenants/{id}/keys` | Issue an API key for a tenant |
+| `GET /v1/admin/tenants` | List all tenants and key counts |
+| `GET /v1/admin/usage` | Usage analytics across all tenants |
 
 ### `GET /v1/health`
 ```json

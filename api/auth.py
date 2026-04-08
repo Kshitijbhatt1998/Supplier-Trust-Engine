@@ -58,21 +58,44 @@ TIER_RPM: dict[str, str] = {
 
 def get_tenant_limit_key(request: Request) -> str:
     """
-    Key function for slowapi. 
+    Key function for slowapi.
     Attempts to identify the tenant/user to apply specific rate limits.
     """
     # 1. Try to get tenant from request state (if set by dependency)
     tenant = getattr(request.state, "tenant", None)
     if tenant:
         return f"tenant:{tenant.id}"
-    
+
     # 2. Try to get user from request state
     user = getattr(request.state, "user", None)
     if user:
         return f"user:{user.id}"
-        
+
     # 3. Fallback to IP
     return request.client.host if request.client else "127.0.0.1"
+
+
+def get_tier_rate_limit(request: Request) -> str:
+    """
+    Dynamic rate-limit string based on the caller's tenant tier.
+    Pass this callable directly to @limiter.limit() on protected routes.
+
+    Usage:
+        @v1.post("/score")
+        @limiter.limit(get_tier_rate_limit)
+        def score(...):
+
+    Tier defaults (override via TIER_RPM in this module):
+        tier_1:     20 req/min
+        tier_2:     100 req/min
+        enterprise: 1000 req/min
+        (unauthenticated): 10 req/min
+    """
+    tenant = getattr(request.state, "tenant", None)
+    if tenant:
+        return TIER_RPM.get(tenant.tier, "20/minute")
+    # Unauthenticated callers (dashboard/health endpoints) get a conservative cap
+    return "10/minute"
 
 # ── Models ───────────────────────────────────────────────────────── #
 
