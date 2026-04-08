@@ -1,5 +1,5 @@
 """
-Textile Supplier Trust Engine — FastAPI v1
+SourceGuard — FastAPI v1
 
 All routes versioned under /v1/.
 
@@ -87,10 +87,10 @@ async def lifespan(app: FastAPI):
 # App                                                                   #
 # ------------------------------------------------------------------ #
 app = FastAPI(
-    title="Textile Supplier Trust Engine",
+    title="SourceGuard",
     description=(
-        "DataVibe — Supplier fulfillment risk scoring for trade intelligence. "
-        "Powers autonomous AI procurement agents."
+        "AI-powered supplier due diligence for autonomous procurement. "
+        "Trust scores, SHAP risk flags, and procurement decisions via API."
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -403,7 +403,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
 @limiter.limit("60/minute")
 def health(request: Request):
     n = con.execute("SELECT COUNT(*) FROM suppliers").fetchone()[0]
-    return {"status": "ok", "service": "textile-trust-engine", "suppliers_in_db": n}
+    return {"status": "ok", "service": "sourceguard", "suppliers_in_db": n}
 
 
 @v1.get("/stats")

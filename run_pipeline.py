@@ -52,7 +52,7 @@ def run_seed():
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Textile Supplier Trust Engine Pipeline")
+    parser = argparse.ArgumentParser(description="SourceGuard Pipeline")
     parser.add_argument("--seed",   action="store_true", help="Seed DB with 50 synthetic suppliers (no scraping needed)")
     parser.add_argument("--scrape", action="store_true", help="Run ImportYeti scraper")
     parser.add_argument("--verify", action="store_true", help="Run certification verifier")

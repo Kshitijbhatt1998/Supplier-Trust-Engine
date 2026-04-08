@@ -1,5 +1,5 @@
 """
-DuckDB storage layer for the Textile Supplier Trust Engine.
+DuckDB storage layer for SourceGuard.
 All raw scraped data lands here before the model sees it.
 """
 
