@@ -18,8 +18,11 @@ from enum import Enum
 from typing import Optional
 from contextlib import asynccontextmanager
 
+import json
+import uuid
 import sentry_sdk
-from fastapi import FastAPI, HTTPException, Depends, Request, Query, status
+from fastapi import FastAPI, HTTPException, Depends, Request, Query, status, BackgroundTasks
+from playwright.async_api import async_playwright
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
@@ -37,7 +40,7 @@ from api.decision_engine import DecisionEngine, ProcurementCriteria
 from api.auth import (
     get_current_tenant, get_admin_key, get_current_user, 
     verify_password, create_access_token, Tenant, User, 
-    ACCESS_TOKEN_EXPIRE_MINUTES
+    ACCESS_TOKEN_EXPIRE_MINUTES, get_tenant_limit_key
 )
 from api.resolver import EntityResolver
 from api.chemical_normalizer import _ROLE_NOISE as _CHEM_ROLE_NOISE
@@ -62,7 +65,7 @@ if _sentry_dsn:
 # IP throttling across multiple test cases. Production behavior remains
 # unchanged.
 limiter_enabled = os.getenv("TESTING", "").lower() not in ("1", "true", "yes")
-limiter = Limiter(key_func=get_remote_address, enabled=limiter_enabled)
+limiter = Limiter(key_func=get_tenant_limit_key, enabled=limiter_enabled)
 
 
 # ------------------------------------------------------------------ #
@@ -253,6 +256,28 @@ def log_usage(tenant_id: str, endpoint: str, method: str, status_code: int):
         """, [tenant_id])
     except Exception as e:
         logger.error(f"Failed to log usage for {tenant_id}: {e}")
+
+
+# ── Marketplace Ecosystem ───────────────────────────────────── #
+
+@v1.post("/integrations/shopify/sync")
+async def sync_shopify(
+    shop_url: str,
+    access_token: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Mock Shopify Sync: Iterates through product vendors and 
+    attaches trust scores to their metadata.
+    """
+    logger.info(f"🛒 Initiating Shopify sync for {shop_url}...")
+    
+    # In reality, this would use the Shopify REST/GraphQL API
+    # 1. Fetch products -> extract 'vendor'
+    # 2. Match vendor to our suppliers
+    # 3. Update product metafields/tags with trust score
+    
+    return {"status": "success", "synced_vendors": 12, "shop": shop_url}
 
 
 def _score_supplier_by_request(req: ScoreRequest) -> TrustScoreResponse:

@@ -49,6 +49,31 @@ TIER_QUOTA: dict[str, int | None] = {
     "enterprise": None,
 }
 
+# Real-time Rate limits (Requests Per Minute)
+TIER_RPM: dict[str, str] = {
+    "tier_1":     "20/minute",
+    "tier_2":     "100/minute",
+    "enterprise": "1000/minute",
+}
+
+def get_tenant_limit_key(request: Request) -> str:
+    """
+    Key function for slowapi. 
+    Attempts to identify the tenant/user to apply specific rate limits.
+    """
+    # 1. Try to get tenant from request state (if set by dependency)
+    tenant = getattr(request.state, "tenant", None)
+    if tenant:
+        return f"tenant:{tenant.id}"
+    
+    # 2. Try to get user from request state
+    user = getattr(request.state, "user", None)
+    if user:
+        return f"user:{user.id}"
+        
+    # 3. Fallback to IP
+    return request.client.host if request.client else "127.0.0.1"
+
 # ── Models ───────────────────────────────────────────────────────── #
 
 class Tenant(BaseModel):
@@ -128,7 +153,9 @@ async def get_current_user(
     if row is None:
         raise HTTPException(status_code=401, detail="User not found")
     
-    return User(id=row[0], email=row[1], full_name=row[2], role=row[3], tenant_id=row[4])
+    # Store user in request state for rate limiter
+    request.state.user = User(id=row[0], email=row[1], full_name=row[2], role=row[3], tenant_id=row[4])
+    return request.state.user
 
 
 async def get_current_tenant(
@@ -180,7 +207,9 @@ async def get_current_tenant(
                 detail=f"Monthly quota of {quota:,} requests exceeded.",
             )
 
-    return Tenant(id=tenant_id, name=name, tier=tier, status=t_status)
+    # Store tenant in request state for rate limiter
+    request.state.tenant = Tenant(id=tenant_id, name=name, tier=tier, status=t_status)
+    return request.state.tenant
 
 
 async def get_admin_key(
