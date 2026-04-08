@@ -38,7 +38,7 @@ def seed_admin_user():
             VALUES (?, ?, ?, ?, 'admin', ?)
         """, [uuid.uuid4().hex, email, hashed_pw, full_name, tenant_id])
         print(f"Successfully created admin user: {email}")
-        print(f"Temporary Password: {password}")
+        print("A temporary password has been set for this admin user.")
         print("IMPORTANT: Change this password immediately after first login.")
     except Exception as e:
         if "UNIQUE constraint failed" in str(e):
