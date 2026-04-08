@@ -1,0 +1,17 @@
+{
+  "_comment": "Add the 'sourceguard' block to your Claude Desktop mcpServers config.",
+  "_config_path_windows": "%APPDATA%\\Claude\\claude_desktop_config.json",
+  "_config_path_mac":     "~/Library/Application Support/Claude/claude_desktop_config.json",
+
+  "mcpServers": {
+    "sourceguard": {
+      "command": "python",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "D:\\Project ideas\\Supplier_trust_Engine\\Supplier-Trust-Engine",
+      "env": {
+        "SOURCEGUARD_API_URL": "http://localhost:8000/v1",
+        "SOURCEGUARD_API_KEY": "YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}

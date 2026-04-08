@@ -1,6 +1,6 @@
-# Supplier Trust Engine
+# SourceGuard
 
-**DataVibe** — AI-powered supplier due diligence for autonomous procurement.
+**AI-powered supplier due diligence for autonomous procurement.**
 
 Transforms raw customs data, certification records, and B2B trade signals into a structured **Trust Score (0–100)** with SHAP-driven, human-readable risk flags. Built for AI procurement agents and trade intelligence teams who need to evaluate hundreds of suppliers in seconds — without a compliance team.
 
@@ -664,4 +664,4 @@ MIT — use freely, attribution appreciated.
 
 ---
 
-*Built by [DataVibe](https://github.com/Kshitijbhatt1998) · Supplier intelligence for the autonomous economy*
+*Built by [Kshitij Bhatt](https://github.com/Kshitijbhatt1998) · SourceGuard — Supplier intelligence for the autonomous economy*
