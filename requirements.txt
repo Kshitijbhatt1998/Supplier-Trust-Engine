@@ -1,6 +1,6 @@
 playwright==1.44.0
 playwright-stealth==1.0.6
-scrapy==2.14.2
+scrapy==2.15.0
 duckdb==1.5.1
 pandas==2.2.2
 numpy==1.26.4
@@ -19,10 +19,10 @@ loguru==0.7.2
 pydantic==2.12.5
 rapidfuzz==3.14.3
 aiofiles==23.2.1
-pytest==8.3.5
+pytest==9.0.3
 PyJWT[crypto]==2.12.1
 passlib[bcrypt]==1.7.4
-python-multipart==0.0.22
+python-multipart==0.0.26
 pyasn1==0.6.3
 mcp>=1.0.0
 fpdf2>=2.7.9
